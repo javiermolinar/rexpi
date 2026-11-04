@@ -58,9 +58,11 @@ async function pickLinked(a) {
   assert.equal(a.overlay.selectedRow().path, a.linked);
 }
 
-test("short and long commands share one transient picker; Escape never launches or deletes", async t => {
+test("canonical worktrees command and labeled alias share one picker; Escape never launches or deletes", async t => {
   const a = await setup(t);
   assert.deepEqual([...a.commands.keys()], ["rxw", "rxworktrees"]);
+  assert.match(a.commands.get("rxw").description, /Browse Git worktrees/);
+  assert.equal(a.commands.get("rxworktrees").description, "Alias for /rxw");
   const running = a.commands.get("rxw").handler("", a.ctx);
   await until(() => a.overlay?.selectedRow());
   await a.commands.get("rxworktrees").handler("", a.ctx); assert.equal(a.opened, 1);

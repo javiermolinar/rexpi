@@ -36,9 +36,11 @@ test("opening only reads, double open is ignored, Escape cancels and reopening w
   const again = a.open(); await until(() => a.opened === 2 && a.overlay?.selectedRow());
   a.overlay.handleInput("\x1b"); await again;
 });
-test("short and long commands share the same overlay and reentry guard", async t => {
+test("canonical agents command and labeled alias share the same overlay and reentry guard", async t => {
   const a = await setup(t);
   assert.deepEqual([...a.commands.keys()], ["rxa", "rxagents"]);
+  assert.match(a.commands.get("rxa").description, /Show agents/);
+  assert.equal(a.commands.get("rxagents").description, "Alias for /rxa");
   const running = a.commands.get("rxa").handler("", a.ctx);
   await until(() => a.overlay?.selectedRow());
   await a.commands.get("rxagents").handler("", a.ctx);

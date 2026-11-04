@@ -57,6 +57,7 @@ try {
   parentTarget = await rex.create({ placement: "session", source, cwd: repo, sessionName: "pi-rex smoke workspace", title: "pi-rex smoke", focus: false,
     command: ["/usr/bin/env", "PATH=" + process.env.PATH, "PI_CODING_AGENT_DIR=" + agent,
       "PI_REX_CLI=" + rexBinary, "PI_REX_SERVER=" + server.endpoint, "PI_REX_BINARY=" + wrapper, "PI_REX_STATE_DIR=" + store.directory,
+      "PI_REX_RETURN_KEY=ctrl+alt+b", "PI_REX_AGENTS_KEY=off", "PI_REX_MESSAGES_STOP_KEY=ctrl+alt+m",
       wrapper, "--extension", join(repo, "extensions", "index.ts"), "--session-id", parentId] });
   createdSession = parentTarget.sessionId;
   const matches = await rex.matchingSessions("PI-REX SMOKE WORKSPACE");
@@ -96,15 +97,9 @@ try {
   await sendCommand(child.blockId, "/reload");
   const reloaded = await wait(b => b.piSessionId === child.piSessionId && b.token !== child.token);
   assert.equal(reloaded.conversationId, child.conversationId);
-  await sendCommand(child.blockId, "/rxwho");
-  let observedOrigin = false;
-  for (let i = 0; i < 30; i++) {
-    const capture = await exec(rexBinary, ["--autostart=false", "-S", server.endpoint, "capture", "-s", createdSession, "-b", child.blockId, "--trim", "--unwrap"]);
-    if (capture.stdout.includes(parent.conversationId)) { observedOrigin = true; break; }
-    await sleep(100);
-  }
-  assert.ok(observedOrigin, "Live child identity must retain its precise parent after /reload");
-  await sendCommand(child.blockId, "/rxbk");
+  // Exact parent focus after reload also proves the child retained its parent link.
+  // Use the direct shortcut: ordinary text would be a model prompt, not a command.
+  await exec(rexBinary, ["--autostart=false", "-S", server.endpoint, "send-key", "-s", createdSession, "-b", child.blockId, "ctrl+alt+b"]);
   let returned = false;
   for (let i = 0; i < 30; i++) {
     const view = await rex.view(createdSession);
@@ -114,7 +109,7 @@ try {
     }
     await sleep(100);
   }
-  assert.ok(returned, "Same-session /rxbk must focus the exact parent without an app action");
+  assert.ok(returned, "Same-session return shortcut must retain and focus the exact parent after /reload without an app action");
   await sendCommand(child.blockId, "/new");
   const replaced = await wait(b => b.blockId === child.blockId && b.piSessionId !== child.piSessionId);
   assert.notEqual(replaced.conversationId, child.conversationId);
@@ -152,7 +147,7 @@ try {
     assert.equal(after.active_window_id, parentTarget.windowId, "Background tools must not change the active tab");
     assert.equal(after.windows.find(w => w.window_id === parentTarget.windowId).focused_block_id, parent.blockId);
   }
-  console.log("Native smoke passed: exact named workspace + independent tab title, real Pi root + child tab, exact process bindings, parent identity across /reload, same-session /rxbk focus, fresh identity after /new, configured floating/tab tools with preserved focus; no model prompts. Cross-session app selection was not exercised.");
+  console.log("Native smoke passed: exact named workspace + independent tab title, real Pi root + child tab, exact process bindings, parent identity across /reload, same-session return-shortcut focus, fresh identity after /new, configured floating/tab tools with preserved focus; no model prompts. Cross-session app selection was not exercised.");
   success = true;
 } catch (error) {
   if (parentTarget) {

@@ -6,6 +6,8 @@ import { cleanTitle } from "./state.ts";
 import type { Created } from "./rex.ts";
 
 export type TerminalPlacement = "right" | "down" | "tab" | "floating";
+/** Retained outcomes are small; the bound only forces an explicit reload in pathological sessions. */
+const MAX_REQUESTS = 4096;
 export type Bounds = [number, number, number, number];
 export type Command = string | string[];
 export interface TerminalOptions {
@@ -36,8 +38,10 @@ export function validateTerminal(options: TerminalOptions): void {
   if (typeof cmd === "string") {
     if (!cmd.trim() || cmd.length > 16384 || cmd.includes("\0")) throw new Error("command must be nonempty shell text (maximum 16,384 characters)");
   } else if (!Array.isArray(cmd) || cmd.length === 0 || cmd.length > 128 || !cmd[0]
-      || !cmd.every(v => typeof v === "string" && v.length <= 4096 && !v.includes("\0"))
-      || cmd.reduce((size, v) => size + v.length, 0) > 32768) throw new Error("command must be a valid executable/argument array");
+      || !cmd.every(v => typeof v === "string" && v.length <= 4096 && !v.includes("\0")))
+    throw new Error("command must be a valid executable/argument array");
+  else if (cmd.reduce((size, v) => size + v.length, 0) > 32768)
+    throw new Error("command arguments exceed the 32,768-character total limit");
   if (options.placement !== undefined && !["right", "down", "tab", "floating"].includes(options.placement)) throw new Error("Invalid terminal placement");
   for (const name of ["cwd", "title"] as const) {
     const value = options[name];
@@ -66,14 +70,18 @@ export function terminalText(result: TerminalResult): string {
 export class TerminalOpener {
   private readonly runtime: Runtime;
   private readonly path: string;
-  private readonly requests = new Map<string, Promise<TerminalResult>>();
+  // Settled outcomes replace their promises: repeated IDs inspect compact evidence instead of
+  // creating a second terminal, so entries are retained rather than evicted.
+  private readonly requests = new Map<string, Promise<TerminalResult> | TerminalResult>();
   constructor(runtime: Runtime, path = process.env.PATH ?? "") { this.runtime = runtime; this.path = path; }
   open(id: string, options: TerminalOptions, cwd: string, signal?: AbortSignal): Promise<TerminalResult> {
     const previous = this.requests.get(id);
-    if (previous) return previous;
-    if (this.requests.size >= 256) return Promise.reject(new Error("Terminal request history is full; reload explicitly before more opens"));
+    if (previous) return Promise.resolve(previous);
+    if (this.requests.size >= MAX_REQUESTS)
+      return Promise.reject(new Error("Terminal request history is full (" + MAX_REQUESTS + "); reload explicitly before more opens"));
     const result = this.perform(id, options, cwd, signal);
     this.requests.set(id, result);
+    void result.then(value => { this.requests.set(id, value); }, () => { /* rejected IDs keep their evidence */ });
     return result;
   }
   private async perform(id: string, options: TerminalOptions, cwd: string, signal?: AbortSignal): Promise<TerminalResult> {

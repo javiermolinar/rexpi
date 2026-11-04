@@ -18,13 +18,15 @@
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "node scripts/check-package.mjs",
+    "prepublishOnly": "npm test && npm run typecheck && npm run pack:check"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "extensions/",
     "lib/",
-    "README.md",
-    "CHANGELOG.md",
     "LICENSE"
   ],
   "pi": {

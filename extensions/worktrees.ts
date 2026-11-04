@@ -158,7 +158,7 @@ export function registerWorktreesCommand(pi: ExtensionAPI, current: () => { runt
     }
   };
   for (const name of ["rxw", "rxworktrees"]) pi.registerCommand(name, {
-    description: "Browse Git worktrees: open fresh Pi tabs or safely remove a worktree",
+    description: name === "rxw" ? "Browse Git worktrees: open fresh Pi tabs or safely remove a worktree" : "Alias for /rxw",
     handler: (_args, ctx) => open(ctx),
   });
   return { cancel, open };

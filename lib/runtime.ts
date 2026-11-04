@@ -13,6 +13,14 @@ export interface Snapshot {
   generation: number;
   signal: AbortSignal;
 }
+/** Fail closed unless this Pi conversation is still the verified one backing `feature`.
+    Identity metadata is not execution permission. */
+export function requireFeature<T>(runtime: Runtime | undefined, feature: T | undefined, sessionId?: string): T {
+  if (!runtime || feature === undefined) throw new Error("No verified pi-rex conversation");
+  if (sessionId !== undefined && runtime.snapshot().state.piSessionId !== sessionId)
+    throw new Error("Pi source conversation changed");
+  return feature;
+}
 export interface Child {
   identity: Identity;
   blockId?: string;
@@ -107,7 +115,7 @@ export class Runtime {
   private updateStatus(): void {
     if (!this.state) return;
     this.context?.ui.setStatus("pi-rex", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
-      + (this.state.origin ? " · /rxbk" : ""));
+      + (this.state.origin ? " · parent linked" : ""));
   }
   snapshot(): Snapshot {
     if (!this.state || !this.server) throw new Error("No verified pi-rex conversation; use interactive Pi inside Rex");

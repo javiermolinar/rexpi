@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Opt-in delegated result returns through `rex_start_pi({ returnResults: true })`. Require a nonblank task and an exact verified fresh child before registering short-lived, request-scoped return permission; ordinary launches remain fresh-only without automatic returns.
+- Local related-conversation messaging with `rex_message_send` for progress, questions, and results. Validate exact endpoints and live processes, bound envelopes to 32 KiB, retain private mailbox evidence, and fence duplicate or uncertain sends without automatic republication.
+- Scoped parent follow-ups for authorized question/result messages, with 30-minute expiry, a 16-attempt per-request budget, and a 32-request limit. Hold imports while Pi is busy or user input/UI is pending; persist intent before enqueue to suppress replay. Peer findings remain untrusted data, never permission for new work.
+- `rex_message_control` for status, observation-only mode, and stopping returns; `rex_message_inbox` for paginated read-only previews without delivery, replay, or model wake-up.
+- **Ctrl+Alt+M** to stop future result returns without a model call, configurable through `PI_REX_MESSAGES_STOP_KEY`. Revoke tickets on abort and session/lifecycle changes without killing children, deleting evidence, or claiming accepted SDK work was retracted.
+- `rex_return_to_parent` and read-only `rex_inspect` tools for exact-parent navigation and conversation/child/messaging evidence.
+- Messaging transport-worker, SDK, lifecycle, receipt, and regression tests; package-artifact validation and a CI matrix covering Linux Node 22.19.0/24/26 and macOS Node 26.
+- A README capability inventory covering launches, result returns, terminal tools, named workspaces, project jumps, agent/worktree overlays, configuration, and safety limits.
+
+### Changed
+
+- Replace `/rxbk` and `/rxwho` with `rex_return_to_parent` and `rex_inspect`. **Ctrl+Alt+B** still returns directly; launch slash commands and overlay commands remain available.
+- Keep launch/open outcome fences across branch-runtime replacement so repeated tool-call IDs cannot create replacement resources. Report binding, result-return registration, storage, and follow-up enqueue as separate evidence, never task readiness or completion.
+- Give the direct messaging-stop shortcut priority over conflicting return/agents keys and forward its configured override to child launches.
+- Use compact shared tool schemas and runtime guidance that distinguish authorized operations from metadata and peer text.
+
 ## 0.1.0
 
 - Protect worktrees whose assume-unchanged/skip-worktree index entries can hide local edits, without changing those flags. Block tracked submodules and leftover submodule metadata before admitting a deletion batch; fail closed on incomplete index inspection.

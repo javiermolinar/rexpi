@@ -73,7 +73,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, getRuntime: () => Runtim
     }
   };
   for (const name of ["rxa", "rxagents"]) pi.registerCommand(name, {
-    description: "Show agents in Rex: filter and jump to a live pane",
+    description: name === "rxa" ? "Show agents in Rex: filter and jump to a live pane" : "Alias for /rxa",
     handler: (_args, ctx) => open(ctx),
   });
   return { cancel, open };

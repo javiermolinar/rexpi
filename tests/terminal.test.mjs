@@ -60,8 +60,21 @@ test("duplicate terminal IDs reuse evidence instead of launching again", async t
   const a = await active(t), opener = new TerminalOpener(a.runtime);
   const first = opener.open("repeat", { command: ["/bin/echo"] }, a.root);
   assert.equal(opener.open("repeat", { command: ["/bin/echo", "different"] }, a.root), first);
-  await first;
+  const settled = await first;
   assert.equal(a.w.created.length, 1);
+  // Settled outcomes stay as compact evidence: a repeated ID never creates a second terminal.
+  assert.deepEqual(await opener.open("repeat", { command: ["/bin/echo", "third"] }, a.root), settled);
+  assert.equal(a.w.created.length, 1);
+});
+test("rejected terminal requests keep their evidence instead of retrying", async t => {
+  const a = await active(t), opener = new TerminalOpener(a.runtime);
+  await assert.rejects(opener.open("invalid", { command: "" }, a.root), /nonempty/);
+  await assert.rejects(opener.open("invalid", { command: ["/bin/echo"] }, a.root), /nonempty/);
+  assert.equal(a.w.created.length, 0);
+});
+test("aggregate argument length has its own limit and error", () => {
+  assert.throws(() => validateTerminal({ command: ["/bin/echo", ...Array.from({ length: 9 }, () => "x".repeat(4000))] }),
+    /32,768-character total limit/);
 });
 test("unknown floating creation is not retried or cleaned up", async t => {
   const a = await active(t), opener = new TerminalOpener(a.runtime);

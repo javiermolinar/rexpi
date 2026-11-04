@@ -54,15 +54,16 @@ test("verified launch binds exact task, conversation, session, block and process
   assert.ok(a.w.created[0].includes("--extension"));
   assert.equal(a.w.created[0].includes("--continue"), false);
 });
-test("child launches forward agents shortcut overrides, including opt-out", async t => {
+test("child launches forward agents and messaging-stop shortcut overrides, including opt-out", async t => {
   for (const key of ["alt+shift+a", "off"]) {
     await t.test(key, async t => {
       const a = await active(t);
       const launcher = new Launcher(a.runtime, { extension, piBinary: "/bin/echo", agentDirectory: a.root,
-        stateDirectory: a.store.directory, path: process.env.PATH, agentsKey: key, startupTimeoutMs: 1000 });
+        stateDirectory: a.store.directory, path: process.env.PATH, agentsKey: key, messagesStopKey: key, startupTimeoutMs: 1000 });
       a.w.onCreate = args => acknowledge(a, args);
       await launcher.launch("shortcut", { placement: "tab", focus: false }, a.root);
       assert.ok(a.w.created[0].includes("PI_REX_AGENTS_KEY=" + key));
+      assert.ok(a.w.created[0].includes("PI_REX_MESSAGES_STOP_KEY=" + key));
     });
   }
 });

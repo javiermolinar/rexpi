@@ -19,6 +19,10 @@ export interface CreateOptions {
 }
 export interface Created { sessionId: string; blockId: string; windowId?: string; layerId?: string }
 export interface TerminalPane extends Target { sessionLabel: string; windowLabel: string; label: string }
+interface Inspection { sessionId: string; sessionLabel: string; windowId: string; windowLabel: string;
+  block: Record<string, unknown> }
+/** Bounded parallelism for `session.view` subprocess calls. */
+const VIEW_CONCURRENCY = 8;
 
 function array(value: unknown): unknown[] {
   if (value === null) return [];
@@ -90,31 +94,42 @@ export class Rex {
       return { sessionId: value.session_id, name: value.label };
     }).filter(value => canonicalName(value.name) === canonicalName(name));
   }
-  async locate(blockId: string, signal?: AbortSignal): Promise<Target> {
-    if (!this.server || !rexId(blockId, "block")) throw new Error("Unverified Rex block");
-    const listed = await this.api("session.list", {}, signal);
-    const sessions = array(listed.sessions);
-    if (sessions.length > 128) throw new Error("Too many Rex sessions to resolve a target safely");
-    const matches: Target[] = [];
-    for (const rawSession of sessions) {
-      const sessionId = record(rawSession).session_id;
-      if (!rexId(sessionId, "session")) throw new Error("Invalid Rex session identity");
-      const view = await this.view(sessionId, signal);
-      for (const rawWindow of array(view.windows ?? null)) {
-        const window = record(rawWindow);
-        if (!rexId(window.window_id, "window")) throw new Error("Invalid Rex window identity");
-        for (const rawLayer of array(window.layers)) {
-          for (const rawBlock of array(record(rawLayer).blocks)) {
-            const block = record(rawBlock);
-            if (block.block_id !== blockId) continue;
-            if (block.host_id !== this.server.hostId || block.creator_name !== "com.superlogical.terminal")
-              throw new Error("The Rex pane is remote or is not a terminal");
-            if (block.owner != null && !rexId(block.owner, "client")) throw new Error("Invalid Rex pane owner");
-            matches.push({ sessionId, windowId: window.window_id, blockId,
-              ...(block.owner ? { owner: block.owner as string } : {}) });
-          }
+  /** One traversal for session/window/layer/block listings; callers apply their own filters.
+      Session views are fetched with bounded concurrency, but rows keep session order. */
+  private async inspect(signal?: AbortSignal): Promise<Inspection[]> {
+    const listed = array((await this.api("session.list", {}, signal)).sessions);
+    if (listed.length > 128) throw new Error("Too many Rex sessions to inspect safely");
+    const sessions = listed.map(record);
+    for (const session of sessions)
+      if (!rexId(session.session_id, "session")) throw new Error("Invalid Rex session identity");
+    const groups: Inspection[][] = sessions.map(() => []);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < sessions.length) {
+        const index = next++, session = sessions[index], sessionId = session.session_id as string;
+        const view = await this.view(sessionId, signal);
+        for (const rawWindow of array(view.windows ?? null)) {
+          const window = record(rawWindow);
+          if (!rexId(window.window_id, "window")) throw new Error("Invalid Rex window identity");
+          for (const rawLayer of array(window.layers)) for (const rawBlock of array(record(rawLayer).blocks))
+            groups[index].push({ sessionId, sessionLabel: typeof session.label === "string" ? session.label : sessionId,
+              windowId: window.window_id, windowLabel: typeof window.label === "string" ? window.label : window.window_id,
+              block: record(rawBlock) });
         }
       }
+    };
+    await Promise.all(Array.from({ length: Math.min(VIEW_CONCURRENCY, sessions.length) }, worker));
+    return groups.flat();
+  }
+  async locate(blockId: string, signal?: AbortSignal): Promise<Target> {
+    if (!this.server || !rexId(blockId, "block")) throw new Error("Unverified Rex block");
+    const matches: Target[] = [];
+    for (const { sessionId, windowId, block } of await this.inspect(signal)) {
+      if (block.block_id !== blockId) continue;
+      if (block.host_id !== this.server.hostId || block.creator_name !== "com.superlogical.terminal")
+        throw new Error("The Rex pane is remote or is not a terminal");
+      if (block.owner != null && !rexId(block.owner, "client")) throw new Error("Invalid Rex pane owner");
+      matches.push({ sessionId, windowId, blockId, ...(block.owner ? { owner: block.owner as string } : {}) });
     }
     if (matches.length !== 1) throw new Error(matches.length ? "Rex pane is ambiguous" : "Rex pane is closed or detached");
     return matches[0];
@@ -122,32 +137,18 @@ export class Rex {
   /** Enumerate placed local terminals, including every split and floating layer. */
   async terminals(signal?: AbortSignal): Promise<TerminalPane[]> {
     if (!this.server) throw new Error("Unverified Rex server");
-    const listed = array((await this.api("session.list", {}, signal)).sessions);
-    if (listed.length > 128) throw new Error("Too many Rex sessions to list agents safely");
     const panes: TerminalPane[] = [];
     const seen = new Set<string>();
-    for (const raw of listed) {
-      const session = record(raw);
-      if (!rexId(session.session_id, "session")) throw new Error("Invalid Rex session identity");
-      const view = await this.view(session.session_id, signal);
-      for (const rawWindow of array(view.windows ?? null)) {
-        const window = record(rawWindow);
-        if (!rexId(window.window_id, "window")) throw new Error("Invalid Rex window identity");
-        for (const layer of array(window.layers)) for (const rawBlock of array(record(layer).blocks)) {
-          const block = record(rawBlock);
-          if (block.host_id !== this.server.hostId || block.creator_name !== "com.superlogical.terminal") continue;
-          if (!rexId(block.block_id, "block") || (block.owner != null && !rexId(block.owner, "client")))
-            throw new Error("Invalid Rex terminal identity");
-          if (seen.has(block.block_id)) throw new Error("Rex terminal is ambiguous");
-          seen.add(block.block_id);
-          panes.push({ sessionId: session.session_id, windowId: window.window_id, blockId: block.block_id,
-            ...(block.owner ? { owner: block.owner as string } : {}),
-            sessionLabel: typeof session.label === "string" ? session.label : session.session_id,
-            windowLabel: typeof window.label === "string" ? window.label : window.window_id,
-            label: typeof block.label === "string" ? block.label : block.block_id });
-          if (panes.length > 256) throw new Error("Too many Rex terminals to list agents safely");
-        }
-      }
+    for (const { sessionId, sessionLabel, windowId, windowLabel, block } of await this.inspect(signal)) {
+      if (block.host_id !== this.server.hostId || block.creator_name !== "com.superlogical.terminal") continue;
+      if (!rexId(block.block_id, "block") || (block.owner != null && !rexId(block.owner, "client")))
+        throw new Error("Invalid Rex terminal identity");
+      if (seen.has(block.block_id as string)) throw new Error("Rex terminal is ambiguous");
+      seen.add(block.block_id as string);
+      panes.push({ sessionId, windowId, blockId: block.block_id as string,
+        ...(block.owner ? { owner: block.owner as string } : {}), sessionLabel, windowLabel,
+        label: typeof block.label === "string" ? block.label : block.block_id as string });
+      if (panes.length > 256) throw new Error("Too many Rex terminals to list agents safely");
     }
     return panes;
   }
