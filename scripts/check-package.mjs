@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const documents = ["package.json", "LICENSE", "README.md", "CHANGELOG.md"];
-const assets = ["assets/pi-rex.jpg"];
+const assets = ["assets/rexpi.jpg", "assets/agents.png", "assets/worktrees.png"];
 const hostPackages = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"];
 const canonical = path => typeof path === "string" && path.length > 0 && !path.includes("\\")
   && !path.startsWith("/") && path.split("/").every(part => part && part !== "." && part !== "..");
@@ -51,7 +51,7 @@ export function validatePackage(manifest, pack, read) {
 }
 
 export function checkPackage(root) {
-  const directory = mkdtempSync(join(realpathSync(tmpdir()), "pi-rex-pack-"));
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), "rexpi-pack-"));
   const options = { cwd: root, encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
   try {
     const args = ["pack", "--ignore-scripts", "--json", "--pack-destination", directory];

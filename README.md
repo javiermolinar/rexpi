@@ -1,6 +1,6 @@
-# pi-rex
+# Rexpi
 
-[![CI](https://github.com/javiermolinar/pi-rex/actions/workflows/ci.yml/badge.svg?style=flat-square)](https://github.com/javiermolinar/pi-rex/actions/workflows/ci.yml)
+[![CI](https://github.com/javiermolinar/rexpi/actions/workflows/ci.yml/badge.svg?style=flat-square)](https://github.com/javiermolinar/rexpi/actions/workflows/ci.yml)
 [![Pi extension](https://img.shields.io/badge/Pi-extension-8b5cf6?style=flat-square)](https://pi.dev)
 [![Rex multiplexer](https://img.shields.io/badge/Rex-multiplexer-f97316?style=flat-square)](https://www.superlogical.com/rex)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
@@ -8,11 +8,11 @@
 
 Tiny arms, many panes. A Pi extension for Rex to multiplex the world.
 
-![pi-rex](assets/pi-rex.jpg)
+![Rexpi](assets/rexpi.jpg)
 
 Extra capabilities for the [Rex](https://www.superlogical.com/rex) multiplexer, still in private beta. Rex already has a comprehensive API. This extension fills a few gaps for Pi users with particularly exquisite taste in panes.
 
-Pi-rex is meant to be used conversationally:
+Rexpi is meant to be used conversationally:
 
 > “Run a fresh review in a side split and send the findings back.”
 >
@@ -37,7 +37,13 @@ New agents get fresh conversations, not a copy of yours. Returning findings is o
 You need **Pi 1.5.0+**, **Node 22.19.0+**, and Pi running inside a local Rex terminal. Keep `rex` and `pi` on PATH. Install zoxide if you want project lookup by name.
 
 ```sh
-pi install git:github.com/javiermolinar/pi-rex
+pi install npm:@javimolina/rexpi
+```
+
+Or install directly from GitHub:
+
+```sh
+pi install git:github.com/javiermolinar/rexpi
 ```
 
 Then start Pi in Rex, or run `/reload`. Outside Rex, the extension stays out of the way.
@@ -75,7 +81,7 @@ You can also just ask Pi to open or reuse a named workspace, choose a model for 
 
 ### Helix and Hunk, floating
 
-Merge this into `~/.pi/agent/settings.json`:
+Merge this into `~/.pi/agent/settings.json`. The settings key is still `pi-rex` for compatibility with existing configurations:
 
 ```json
 {
@@ -111,11 +117,13 @@ Switching between Rex workspaces requires **Remote Control** enabled in Rex Sett
 
 ### Agent panel
 
-*Screenshot to come.*
+![Agent panel showing filtered Rexpi conversations and their statuses](assets/agents.png)
 
 ### Worktree panel
 
-*Screenshot to come.*
+![Worktree panel showing the protected current worktree](assets/worktrees.png)
+
+Captured from a live Rex session. The home-directory path is shortened.
 
 ## License
 

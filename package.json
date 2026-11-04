@@ -1,7 +1,11 @@
 {
-  "name": "pi-rex",
+  "name": "@javimolina/rexpi",
   "version": "0.1.0",
-  "description": "Pi-aware launches and conversation navigation for Rex",
+  "description": "Tiny arms, many panes. A Pi extension for Rex to multiplex the world.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javiermolinar/rexpi.git"
+  },
   "author": "Javi Molina",
   "license": "MIT",
   "type": "module",
@@ -29,7 +33,9 @@
     "lib/",
     "README.md",
     "CHANGELOG.md",
-    "assets/pi-rex.jpg",
+    "assets/rexpi.jpg",
+    "assets/agents.png",
+    "assets/worktrees.png",
     "LICENSE"
   ],
   "pi": {

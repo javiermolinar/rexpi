@@ -5,14 +5,16 @@ import { validatePackage } from "../scripts/check-package.mjs";
 function fixture() {
   const sources = new Map([
     ["package.json", "{}"], ["LICENSE", "MIT"],
-    ["README.md", "# pi-rex\n\n![pi-rex](assets/pi-rex.jpg)"],
+    ["README.md", "# Rexpi\n\n![Rexpi](assets/rexpi.jpg)"],
     ["CHANGELOG.md", "# Changelog\n\n## 0.1.0"],
-    ["assets/pi-rex.jpg", "image fixture"],
+    ["assets/rexpi.jpg", "image fixture"],
+    ["assets/agents.png", "agent screenshot fixture"],
+    ["assets/worktrees.png", "worktree screenshot fixture"],
     ["extensions/index.ts", 'import { runtime } from "../lib/runtime.ts";'],
     ["lib/runtime.ts", 'import { readFileSync } from "node:fs"; import { Type } from "typebox";'],
   ]);
   const manifest = {
-    name: "@example/pi-rex", version: "0.1.0", keywords: ["pi-package"],
+    name: "@example/rexpi", version: "0.1.0", keywords: ["pi-package"],
     pi: { extensions: ["./extensions/index.ts"] },
     peerDependencies: { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", typebox: "*" },
   };
@@ -20,12 +22,12 @@ function fixture() {
   return { manifest, pack, sources, check: () => validatePackage(manifest, pack, path => sources.get(path)) };
 }
 
-test("validates a scoped Pi package with release documents, header image, and runtime imports", () => {
+test("validates a scoped Pi package with release documents, README images, and runtime imports", () => {
   const f = fixture();
-  assert.equal(f.check().size, 7);
+  assert.equal(f.check().size, 9);
 });
 
-for (const path of ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "assets/pi-rex.jpg", "extensions/index.ts", "lib/runtime.ts"]) {
+for (const path of ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "assets/rexpi.jpg", "assets/agents.png", "assets/worktrees.png", "extensions/index.ts", "lib/runtime.ts"]) {
   test(`missing required file or runtime import is rejected: ${path}`, () => {
     const f = fixture(); f.pack.files = f.pack.files.filter(file => file.path !== path);
     assert.throws(f.check, /Missing package|Missing packaged import/);
