@@ -46,14 +46,6 @@ Or install directly from GitHub:
 pi install git:github.com/javiermolinar/rexpi
 ```
 
-Then start Pi in Rex, or run `/reload`. Outside Rex, the extension stays out of the way.
-
-To try it directly from a checkout without installing:
-
-```sh
-pi -e ./extensions/index.ts
-```
-
 ## List of commands
 
 | Command | What it does |
