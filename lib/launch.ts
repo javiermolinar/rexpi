@@ -9,10 +9,12 @@ import type { Created } from "./rex.ts";
 import { SessionClaim, SessionExistsError, sessionName } from "./session-name.ts";
 import type { MessagingRuntime, ReturnTicket } from "./messaging/runtime.ts";
 import { endpointFromBinding, type Endpoint } from "./messaging/protocol.ts";
+import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
 
 export interface LaunchOptions {
   prompt?: string;
   cwd?: string;
+  project?: string;
   placement?: Placement;
   sessionName?: string;
   title?: string;
@@ -33,6 +35,7 @@ export interface LaunchResult {
   target?: Created;
   startup: { state: "bound" | "unconfirmed"; reason?: string };
   warning?: string;
+  project?: ResolvedDirectory;
   returnSetup?: { state: "registered" | "unavailable"; requestId: string; reason?: string };
 }
 export interface LaunchConfig {
@@ -46,6 +49,7 @@ export interface LaunchConfig {
   agentsKey?: string;
   messagesStopKey?: string;
   startupTimeoutMs?: number;
+  resolveProject?: DirectoryResolver;
   messaging?: Pick<MessagingRuntime, "prepareReturn" | "checkReturn" | "registerReturn" | "revokeReturn">;
 }
 function text(value: unknown, name: string, max: number): asserts value is string {
@@ -53,6 +57,11 @@ function text(value: unknown, name: string, max: number): asserts value is strin
     throw new Error("Invalid " + name);
 }
 export function validateOptions(value: LaunchOptions): void {
+  if (value.project !== undefined) {
+    if (value.cwd !== undefined) throw new Error("project and cwd are mutually exclusive");
+    text(value.project, "project (maximum 4,096 characters)", 4096);
+    if (!value.project.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(value.project)) throw new Error("Invalid project query");
+  }
   if (value.sessionName !== undefined) {
     sessionName(value.sessionName);
     if (value.placement !== undefined && value.placement !== "session") throw new Error("sessionName requires session placement");
@@ -139,7 +148,15 @@ export class Launcher {
     const placement = placementFor(options, this.runtime.hasRelatedSplit(own.state));
     const name = options.sessionName === undefined ? undefined : sessionName(options.sessionName);
     if (name && placement !== "session") throw new Error("sessionName requires session placement");
-    const directory = launchDirectory(options.cwd, cwd);
+    let project: ResolvedDirectory | undefined;
+    if (options.project !== undefined) {
+      if (!this.config.resolveProject) throw new Error("Project lookup is unavailable in this runtime; no Pi was launched");
+      await this.runtime.source(own, combined);
+      check();
+      project = await this.config.resolveProject(options.project, cwd, combined);
+      check();
+    }
+    const directory = launchDirectory(project?.directory ?? options.cwd, cwd);
     const binary = executable(this.config.piBinary, cwd, this.config.path);
     const extension = realpathSync(this.config.extension);
     let source = await this.runtime.source(own, combined);
@@ -167,7 +184,8 @@ export class Launcher {
     const result: LaunchResult = { launchId: id, creation: "unknown", placement, identity: {
       taskId: seed.taskId, conversationId: seed.conversationId, piSessionId: seed.piSessionId, role: seed.role,
     }, origin: { taskId: own.state.taskId, conversationId: own.state.conversationId,
-      piSessionId: own.state.piSessionId, role: own.state.role }, startup: { state: "unconfirmed" } };
+      piSessionId: own.state.piSessionId, role: own.state.role }, startup: { state: "unconfirmed" },
+      ...(project ? { project: { ...project, directory } } : {}) };
     let claim: SessionClaim | undefined;
     try {
       if (name) {

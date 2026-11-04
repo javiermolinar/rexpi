@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import type { DirectoryResolver } from "./jump.ts";
+import type { DirectoryResolver } from "./projects.ts";
 import { validateOptions, type Launcher, type LaunchResult } from "./launch.ts";
 import type { Runtime, Snapshot } from "./runtime.ts";
 import { SessionExistsError, sessionName } from "./session-name.ts";

@@ -77,6 +77,21 @@ In either panel, type to search, use the arrow keys to move, and press Enter to 
 
 You can also just ask Pi to open or reuse a named workspace, choose a model for a new agent, return to its parent, or inspect incoming findings. Those use tools rather than more slash commands.
 
+### Opening projects
+
+“Open pr-inbox in a new session” uses `rex_start_pi`:
+
+```json
+{
+  "project": "pr-inbox",
+  "placement": "session"
+}
+```
+
+`project` accepts an existing path or zoxide keywords. Placement is a separate choice: `session` creates a workspace, `tab` creates a tab, and `right` or `down` creates a split. Independent launches default to a new session; related launches keep their task-aware placement defaults.
+
+Use `cwd` for an explicit directory instead of project lookup; don't supply both. Omit `prompt` when you only want to open the project. To reuse a named workspace rather than start fresh Pi, use `rex_open_session`.
+
 ## Configure
 
 ### Helix and Hunk, floating

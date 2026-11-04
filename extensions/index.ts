@@ -12,8 +12,8 @@ import { BindingStore } from "../lib/store.ts";
 import { TerminalOpener } from "../lib/terminal.ts";
 import { LAUNCH_PLACEMENTS, LAUNCH_ROLES, THINKING, literalUnion } from "./schemas.ts";
 import { registerTerminalFeatures } from "./terminal.ts";
-import { ProjectJumper, ProjectResolver } from "../lib/jump.ts";
-import { registerJumpTool } from "./jump.ts";
+import { ProjectResolver } from "../lib/projects.ts";
+import { launchText } from "./launch.ts";
 import { SessionOpener } from "../lib/sessions.ts";
 import { registerSessionTool } from "./sessions.ts";
 import { registerAgentsCommand } from "./agents.ts";
@@ -25,9 +25,10 @@ import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstra
 
 const schema = Type.Object({
   prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Optional task; omit for an empty chat." })),
-  cwd: Type.Optional(Type.String({ description: "Existing local path; absolute, relative to cwd or ~/…" })),
+  cwd: Type.Optional(Type.String({ description: "Existing local directory; absolute, relative or ~/…; cannot combine with project." })),
+  project: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Existing project path or zoxide keywords; cannot combine with cwd. Lookup does not choose placement." })),
   placement: Type.Optional(literalUnion(LAUNCH_PLACEMENTS,
-    "Default: independent=session; first related=right; later/background=tab.")),
+    "Honor the requested location: session=new workspace, right/down=split, tab=new tab. Default: independent=session; first related=right; later/background=tab.")),
   related: Type.Optional(Type.Boolean({ description: "Share task identity only. Default false." })),
   returnResults: Type.Optional(Type.Boolean({ description: "Explicit delegated-result opt-in: requires prompt; implies related=true. May trigger paid follow-ups. Default false." })),
   role: Type.Optional(literalUnion(LAUNCH_ROLES, "review implies related=true, not read-only enforcement.")),
@@ -40,16 +41,6 @@ const schema = Type.Object({
 }, { additionalProperties: false });
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function launchText(result: LaunchResult): string {
-  const returns = result.returnSetup ? result.returnSetup.state === "registered"
-    ? "Scoped result-return permission registered for request " + result.returnSetup.requestId + "; no send or processing is confirmed. "
-    : "Result-return setup unavailable: " + result.returnSetup.reason + " " : "";
-  if (result.creation === "unknown") return "Pi launch outcome unknown. " + result.startup.reason + " " + returns;
-  const target = result.target!;
-  return "Created a fresh Pi " + result.placement + " at " + target.blockId + ". "
-    + (result.startup.state === "bound" ? "Exact Pi initialization binding observed; prompt processing, task readiness and completion are not confirmed. " : result.startup.reason + " ")
-    + (result.warning ? result.warning + " " : "") + returns + "Ask to return to the parent in the child, or use the configured return shortcut. No history was copied.";
-}
 function shortcutKey(value: string | undefined, fallback: string, variable: string): string | undefined {
   if (value === "off") return undefined;
   const key = value ?? fallback;
@@ -77,7 +68,6 @@ export default function piRex(pi: ExtensionAPI, options: { messagingTransport?: 
   let messaging: MessagingRuntime | undefined;
   observeMessaging(pi, () => messaging);
   let terminal: TerminalOpener | undefined;
-  let jumper: ProjectJumper | undefined;
   let sessions: SessionOpener | undefined;
   const worktrees = registerWorktreesCommand(pi, () => ({ runtime, launcher }));
   // Launch outcomes are evidence, not branch-relative authority. Keep their fences across
@@ -95,7 +85,7 @@ export default function piRex(pi: ExtensionAPI, options: { messagingTransport?: 
     activation++; agents.cancel(); worktrees.cancel();
     messaging?.detach(); messaging = undefined;
     runtime?.stop(); runtime = undefined;
-    launcher = undefined; terminal = undefined; jumper = undefined; sessions = undefined;
+    launcher = undefined; terminal = undefined; sessions = undefined;
   };
 
   const initialize = async (ctx: ExtensionContext, allowBootstrap: boolean) => {
@@ -117,13 +107,13 @@ export default function piRex(pi: ExtensionAPI, options: { messagingTransport?: 
       if (generation !== activation) { active.stop(); return; }
       messaging = new MessagingRuntime(pi, active, agentDirectory, { transport: options.messagingTransport ?? "worker" });
       messaging.attach(ctx);
+      const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
       launcher = new Launcher(active, { extension, agentDirectory, stateDirectory, messaging,
+        resolveProject: (query, cwd, signal) => resolver.resolve(query, cwd, signal),
         piBinary: process.env.PI_REX_BINARY ?? "pi", path: process.env.PATH ?? "",
         client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY, agentsKey: process.env.PI_REX_AGENTS_KEY,
         messagesStopKey: process.env.PI_REX_MESSAGES_STOP_KEY });
       terminal = new TerminalOpener(active);
-      const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
-      jumper = new ProjectJumper(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal));
       sessions = new SessionOpener(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal), process.env.PI_REX_CLIENT);
       if (!shortcutRegistered) {
         shortcutRegistered = true;
@@ -166,7 +156,7 @@ export default function piRex(pi: ExtensionAPI, options: { messagingTransport?: 
         registered = true;
         pi.registerTool({
           name: "rex_start_pi", label: "Start Pi in Rex",
-          description: "Start a fresh local Pi conversation with parent navigation; no history transfer.",
+          description: "Start fresh Pi in a new Rex session, split, or tab. Accepts a project path/zoxide query or cwd; honor requested placement. Parent navigation, no history transfer.",
           executionMode: "sequential", parameters: schema,
           async execute(id, params, signal, _update, toolCtx) {
             const sourceLauncher = launcher, sourceRuntime = runtime, sourceMessaging = messaging;
@@ -184,7 +174,6 @@ export default function piRex(pi: ExtensionAPI, options: { messagingTransport?: 
         registerMessagingControls(pi, () => ({ runtime, messaging }));
         registerConversationTools(pi, () => ({ runtime, messaging }));
         registerTerminalFeatures(pi, () => ({ runtime, terminal }), ctx);
-        registerJumpTool(pi, () => ({ runtime, jumper }));
         registerSessionTool(pi, () => ({ runtime, sessions }));
       }
     } catch (error) {

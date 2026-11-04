@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import piRex, { agentsKey, returnKey, messagesStopKey } from "../extensions/index.ts";
 import { sandbox, world, uuid, binding } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
@@ -29,7 +29,7 @@ function fixture(t, overrides = {}, settings = {}) {
     getSettings: () => settings,
     getCommands: () => [...commands.keys()].map(name => ({ name, source: "extension" })) };
   piRex(pi);
-  return { root, w, events, tools, commands, shortcuts, entries, notices, ctx };
+  return { root, w, events, tools, commands, shortcuts, entries, notices, ctx, pi };
 }
 test("factory has no background IO; verified TUI startup registers the Pi tool", async t => {
   const f = fixture(t);
@@ -40,9 +40,9 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.ok(f.tools.has("rex_message_send"));
   assert.ok(f.tools.get("rex_start_pi").parameters.properties.returnResults);
   assert.ok(f.tools.has("rex_message_inbox"));
-  assert.equal(f.tools.get("rex_jump").parameters.properties.returnResults, undefined);
+  assert.ok(f.tools.get("rex_start_pi").parameters.properties.project);
+  assert.equal(f.tools.has("rex_jump"), false);
   assert.ok(f.tools.has("rex_open_terminal"));
-  assert.ok(f.tools.has("rex_jump"));
   assert.ok(f.tools.has("rex_open_session"));
   assert.ok(f.tools.get("rex_start_pi").parameters.properties.sessionName);
   assert.equal(f.tools.get("rex_start_pi").executionMode, "sequential");
@@ -140,21 +140,76 @@ test("rex_open_terminal is independent from the configured command catalog", asy
   assert.equal(f.w.created.length, 1);
   assert.equal(f.w.layerRequests[0].layout.block.options.command.at(-1), "not a catalog entry");
 });
-test("rex_jump opens a path in a fresh Pi tab without adding slash commands or needing zoxide", async t => {
-  const f = fixture(t);
+test("rex_start_pi opens project paths with the requested placement and no extra slash commands", async t => {
+  for (const placement of ["session", "right", "down", "tab"]) await t.test(placement, async t => {
+    const f = fixture(t);
+    await f.events.get("session_start")({}, f.ctx);
+    const store = new BindingStore(join(f.root, "bindings"));
+    f.w.onCreate = args => {
+      const raw = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
+      store.write(binding(decodeBootstrap(raw.slice(raw.indexOf("=") + 1)), { blockId: f.w.next.blockId }));
+    };
+    const result = await f.tools.get("rex_start_pi").execute("project", { project: f.root, placement, focus: false },
+      new AbortController().signal, undefined, f.ctx);
+    assert.deepEqual(result.details.project, { directory: f.root, matchedBy: "path" });
+    assert.equal(result.details.placement, placement);
+    assert.equal(result.details.startup.state, "bound");
+    assert.match(result.content[0].text, /Resolved .* via path/);
+    assert.match(result.content[0].text, new RegExp("Created a fresh Pi " + placement));
+    assert.equal(f.w.created.length, 1);
+    assert.equal(f.w.created[0].filter(arg => arg === "--").length, 1, "No initial task prompt");
+    assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
+  });
+});
+test("rex_start_pi resolves zoxide projects without forcing new-tab placement", async t => {
+  const bin = sandbox(t); symlinkSync("/bin/echo", join(bin, "zoxide"));
+  const f = fixture(t, { PATH: bin });
+  let lookups = 0;
+  f.pi.exec = async (binary, args, options) => {
+    if (args[0] !== "query") return f.w.exec(binary, args, options);
+    lookups++;
+    assert.deepEqual(args, ["query", "--", "pr-inbox"]);
+    assert.equal(options.cwd, f.root); assert.equal(options.timeout, 5000);
+    return { code: 0, stdout: f.root + "\n", stderr: "" };
+  };
   await f.events.get("session_start")({}, f.ctx);
   const store = new BindingStore(join(f.root, "bindings"));
   f.w.onCreate = args => {
     const raw = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
     store.write(binding(decodeBootstrap(raw.slice(raw.indexOf("=") + 1)), { blockId: f.w.next.blockId }));
   };
-  const result = await f.tools.get("rex_jump").execute("project", { query: f.root, focus: false },
-    new AbortController().signal, undefined, f.ctx);
-  assert.equal(result.details.matchedBy, "path");
-  assert.equal(result.details.launch.placement, "tab");
-  assert.equal(result.details.launch.startup.state, "bound");
-  assert.equal(f.w.created.length, 1);
-  assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
+  const result = await f.tools.get("rex_start_pi").execute("pr-inbox", { project: "pr-inbox", focus: false },
+    undefined, undefined, f.ctx);
+  assert.equal(result.details.project.matchedBy, "zoxide");
+  assert.equal(result.details.placement, "session");
+  assert.equal(result.details.target.sessionId, f.w.next.sessionId);
+  assert.equal(result.details.startup.state, "bound");
+  assert.match(result.content[0].text, /via zoxide/);
+  assert.equal(lookups, 1); assert.equal(f.w.created.length, 1);
+});
+test("pending project lookup cannot transfer to a replacement runtime or repeat under the same call ID", async t => {
+  const bin = sandbox(t); symlinkSync("/bin/echo", join(bin, "zoxide"));
+  const f = fixture(t, { PATH: bin });
+  let entered, release, lookups = 0;
+  const waiting = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  f.pi.exec = async (binary, args, options) => {
+    if (args[0] !== "query") return f.w.exec(binary, args, options);
+    lookups++; entered(); await gate;
+    return { code: 0, stdout: f.root + "\n", stderr: "" };
+  };
+  await f.events.get("session_start")({}, f.ctx);
+  const call = () => f.tools.get("rex_start_pi").execute("pending-project", { project: "pr-inbox" }, undefined, undefined, f.ctx)
+    .then(value => ({ value }), error => ({ error }));
+  const first = call();
+  await waiting;
+  await f.events.get("session_tree")({}, f.ctx);
+  const second = call();
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.ok(a.error); assert.equal(b.error, a.error);
+  assert.equal((await call()).error, a.error);
+  assert.equal(lookups, 1); assert.equal(f.w.created.length, 0);
 });
 test("rex_open_session reuses existing workspaces without Pi launch or task parameters", async t => {
   const f = fixture(t);
@@ -170,7 +225,7 @@ test("rex_open_session reuses existing workspaces without Pi launch or task para
 test("creation tool outcomes survive tree replacement without new native work", async t => {
   const cases = [
     ["terminal", "rex_open_terminal", () => ({ command: ["/bin/echo"] })],
-    ["jump", "rex_jump", f => ({ query: f.root, focus: false })],
+    ["project launch", "rex_start_pi", f => ({ project: f.root, focus: false })],
     ["named session", "rex_open_session", f => ({ sessionName: "New workspace", query: f.root, focus: false })],
   ];
   for (const [name, tool, input] of cases) await t.test(name, async t => {
@@ -191,7 +246,7 @@ test("creation tool outcomes survive tree replacement without new native work", 
 test("creation tool rejections survive tree replacement", async t => {
   const cases = [
     ["terminal", "rex_open_terminal", { command: "" }],
-    ["jump", "rex_jump", { query: "" }],
+    ["project launch", "rex_start_pi", { project: "" }],
     ["named session", "rex_open_session", { sessionName: "" }],
   ];
   for (const [name, tool, input] of cases) await t.test(name, async t => {

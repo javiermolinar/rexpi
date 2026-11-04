@@ -61,6 +61,30 @@ test("returnResults validates strict booleans/nonblank tasks/relation; default l
   assert.deepEqual(f.counts(), { prepared: 0, registered: 0 });
 });
 
+test("project launches retain opt-in result returns and explicit session placement", async t => {
+  const f = await setup(t);
+  f.config.resolveProject = async (project, cwd, signal) => {
+    assert.equal(project, "pr-inbox"); assert.equal(cwd, f.root); assert.ok(signal instanceof AbortSignal);
+    return { directory: f.root, matchedBy: "zoxide" };
+  };
+  f.w.onCreate = args => f.ack(args);
+  const result = await f.launcher.launch("project-return", { ...opts, project: "pr-inbox", placement: "session" }, f.root);
+  assert.equal(result.placement, "session");
+  assert.equal(result.project.directory, f.root);
+  assert.equal(result.returnSetup.state, "registered");
+  assert.deepEqual(f.counts(), { prepared: 1, registered: 1 });
+});
+test("failed project lookup revokes only its return ticket; conflicting inputs never prepare one", async t => {
+  const f = await setup(t), other = await f.m.prepareReturn();
+  f.config.resolveProject = async () => { throw Error("project not found"); };
+  await assert.rejects(f.launcher.launch("bad-project", { ...opts, project: "missing" }, f.root), /project not found/);
+  assert.deepEqual(f.counts(), { prepared: 1, registered: 0 });
+  await assert.rejects(f.launcher.launch("conflict", { ...opts, project: "missing", cwd: f.root }, f.root), /mutually exclusive/);
+  assert.deepEqual(f.counts(), { prepared: 1, registered: 0 });
+  f.m.checkReturn(other);
+  assert.equal(f.m.snapshot().returnRequests, 1); assert.equal(f.w.created.length, 0);
+});
+
 test("literal original task plus exact owner/request route; seeded confirmed child only; call IDs join", async t => {
   for (const prompt of ["/rxn nested; $(touch nope)", " @secret", "--continue", "x".repeat(16384)]) {
     const f = await setup(t); let seed;

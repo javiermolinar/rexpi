@@ -5,7 +5,7 @@ import type { Launcher } from "../lib/launch.ts";
 import { WorktreeBrowser, WorktreeRemovalError } from "../lib/worktrees.ts";
 import { WorktreeResultsOverlay, removalCount, type WorktreeRemovalReport } from "../lib/worktree-results-overlay.ts";
 import { WorktreeConfirmationOverlay } from "../lib/worktree-review-overlay.ts";
-import { jumpText } from "./jump.ts";
+import { launchText } from "./launch.ts";
 import { pickerStyle } from "../lib/picker-overlay.ts";
 import { WorktreesOverlay, type WorktreeAction } from "../lib/worktrees-overlay.ts";
 import type { Runtime } from "../lib/runtime.ts";
@@ -143,7 +143,7 @@ export function registerWorktreesCommand(pi: ExtensionAPI, current: () => { runt
         }, { overlay: true, overlayOptions: { width: 80, maxHeight: "70%", anchor: "center", margin: 1 } });
       } else {
         const launch = await browser.open(randomUUID(), result.row, signal);
-        ctx.ui.notify(jumpText({ directory: result.row.path, matchedBy: "path", launch }),
+        ctx.ui.notify(launchText(launch),
           launch.creation === "confirmed" && launch.startup.state === "bound" ? "info" : "warning");
       }
     } catch (error) {
