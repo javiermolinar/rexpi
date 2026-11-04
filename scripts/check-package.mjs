@@ -7,7 +7,8 @@ import { basename, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const documents = ["package.json", "LICENSE"];
+const documents = ["package.json", "LICENSE", "README.md", "CHANGELOG.md"];
+const assets = ["assets/pi-rex.jpg"];
 const hostPackages = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"];
 const canonical = path => typeof path === "string" && path.length > 0 && !path.includes("\\")
   && !path.startsWith("/") && path.split("/").every(part => part && part !== "." && part !== "..");
@@ -30,9 +31,9 @@ export function validatePackage(manifest, pack, read) {
   assert.equal(files.size, paths.length, "Duplicate package paths");
   for (const path of files) {
     assert(canonical(path), `Unsafe package path: ${path}`);
-    assert(documents.includes(path) || /^(extensions|lib)\/.+\.ts$/.test(path), `Unexpected package file: ${path}`);
+    assert(documents.includes(path) || assets.includes(path) || /^(extensions|lib)\/.+\.ts$/.test(path), `Unexpected package file: ${path}`);
   }
-  for (const path of [...documents, "extensions/index.ts"]) assert(files.has(path), `Missing package file: ${path}`);
+  for (const path of [...documents, ...assets, "extensions/index.ts"]) assert(files.has(path), `Missing package file: ${path}`);
   for (const path of files) {
     if (!path.endsWith(".ts")) continue;
     for (const { fileName: specifier } of ts.preProcessFile(read(path), true, true).importedFiles) {

@@ -27,6 +27,9 @@
   "files": [
     "extensions/",
     "lib/",
+    "README.md",
+    "CHANGELOG.md",
+    "assets/pi-rex.jpg",
     "LICENSE"
   ],
   "pi": {

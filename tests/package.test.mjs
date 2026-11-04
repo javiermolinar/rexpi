@@ -5,6 +5,9 @@ import { validatePackage } from "../scripts/check-package.mjs";
 function fixture() {
   const sources = new Map([
     ["package.json", "{}"], ["LICENSE", "MIT"],
+    ["README.md", "# pi-rex\n\n![pi-rex](assets/pi-rex.jpg)"],
+    ["CHANGELOG.md", "# Changelog\n\n## 0.1.0"],
+    ["assets/pi-rex.jpg", "image fixture"],
     ["extensions/index.ts", 'import { runtime } from "../lib/runtime.ts";'],
     ["lib/runtime.ts", 'import { readFileSync } from "node:fs"; import { Type } from "typebox";'],
   ]);
@@ -17,19 +20,19 @@ function fixture() {
   return { manifest, pack, sources, check: () => validatePackage(manifest, pack, path => sources.get(path)) };
 }
 
-test("validates a scoped Pi package without prose documents and checks runtime imports", () => {
+test("validates a scoped Pi package with release documents, header image, and runtime imports", () => {
   const f = fixture();
-  assert.equal(f.check().size, 4);
+  assert.equal(f.check().size, 7);
 });
 
-for (const path of ["package.json", "LICENSE", "extensions/index.ts", "lib/runtime.ts"]) {
+for (const path of ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "assets/pi-rex.jpg", "extensions/index.ts", "lib/runtime.ts"]) {
   test(`missing required file or runtime import is rejected: ${path}`, () => {
     const f = fixture(); f.pack.files = f.pack.files.filter(file => file.path !== path);
     assert.throws(f.check, /Missing package|Missing packaged import/);
   });
 }
 
-for (const path of ["README.md", "CHANGELOG.md", "docs/local-result-mailbox.md", "docs/releasing.md", "plans/run/report.md", "tests/fixture.ts", "scripts/smoke.mjs", ".github/workflows/ci.yml", ".npmrc", "auth.json", "../secret", "/secret", "lib/../../secret.ts", "lib\\secret.ts"]) {
+for (const path of ["assets/private.jpg", "docs/local-result-mailbox.md", "docs/releasing.md", "plans/run/report.md", "tests/fixture.ts", "scripts/smoke.mjs", ".github/workflows/ci.yml", ".npmrc", "auth.json", "../secret", "/secret", "lib/../../secret.ts", "lib\\secret.ts"]) {
   test(`unexpected/private archive path is rejected: ${path}`, () => {
     const f = fixture(); f.pack.files.push({ path });
     assert.throws(f.check, /Unexpected package file|Unsafe package path/);
