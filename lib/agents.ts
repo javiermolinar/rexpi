@@ -14,13 +14,15 @@ export interface AgentRow extends TerminalPane {
   conversationTitle?: string;
   message: string;
   cwd: string;
+  /** Unmodified process path for safety checks; never render without sanitizing. */
+  rawCwd?: string;
   current: boolean;
   binding?: Binding;
   native: boolean;
   processDetected?: boolean;
 }
 export interface AgentList { rows: AgentRow[]; unavailable: number }
-interface Process { pid: number; name: string; cwd: string; app?: string }
+interface Process { pid: number; name: string; cwd: string; rawCwd?: string; app?: string }
 interface Report { app: string; pid: number; name: string; state: AgentState; title: string; message: string }
 const APPS: Record<string, string> = { pi: "Pi", claude: "Claude", "claude-code": "Claude", codex: "Codex", opencode: "OpenCode", gemini: "Gemini" };
 const ORDER: Record<AgentState, number> = { blocked: 0, error: 1, working: 2, idle: 3, done: 4, unknown: 5 };
@@ -59,7 +61,7 @@ function processes(value: Record<string, unknown>): Process[] {
     if (!raw) return [];
     const p = record(raw);
     return Number.isSafeInteger(p.pid) && Number(p.pid) > 0 && typeof p.name === "string"
-      ? [{ pid: Number(p.pid), name: p.name, cwd: agentText(p.cwd), app: processAgent(p) }] : [];
+      ? [{ pid: Number(p.pid), name: p.name, cwd: agentText(p.cwd), rawCwd: typeof p.cwd === "string" ? p.cwd : undefined, app: processAgent(p) }] : [];
   });
 }
 function reports(value: Record<string, unknown>): Report[] {
@@ -100,6 +102,7 @@ export class AgentBrowser {
       serverInstance, app: r.app, pid: r.pid, processName: r.name, state: r.state,
       title: r.title || agentText(pane.label), message: r.message,
       cwd: live.find(p => p.pid === r.pid && p.name === r.name)?.cwd ?? "",
+      rawCwd: live.find(p => p.pid === r.pid && p.name === r.name)?.rawCwd,
       current: pane.blockId === this.runtime.snapshot().blockId && r.pid === process.pid && r.app === "Pi", native: true,
       ...(r.app === "Pi" && binding?.pid === r.pid ? { binding } : {}) }));
     // Reporting is optional. A recognized live CLI is still an agent, but its
@@ -109,7 +112,7 @@ export class AgentBrowser {
       if (!p.app || rows.some(row => row.pid === p.pid && row.processName === p.name)) continue;
       rows.push({ ...pane, key: pane.blockId + ":" + p.pid + ":" + p.name + ":" + p.app, serverInstance,
         app: p.app, pid: p.pid, processName: p.name, state: "unknown", title: agentText(pane.label), message: "No native status",
-        cwd: p.cwd, current: pane.blockId === this.runtime.snapshot().blockId && p.pid === process.pid && p.app === "Pi",
+        cwd: p.cwd, rawCwd: p.rawCwd, current: pane.blockId === this.runtime.snapshot().blockId && p.pid === process.pid && p.app === "Pi",
         native: false, processDetected: true, ...(p.app === "Pi" && binding?.pid === p.pid ? { binding } : {}) });
     }
     // A live Pi binding can identify older/wrapped Pi executables as well.
@@ -117,7 +120,7 @@ export class AgentBrowser {
       const p = live.find(p => p.pid === binding.pid)!;
       rows.push({ ...pane, key: pane.blockId + ":" + p.pid + ":" + p.name + ":Pi", serverInstance,
         app: "Pi", pid: p.pid, processName: p.name, state: "unknown", title: agentText(pane.label), message: "No native status",
-        cwd: p.cwd, current: pane.blockId === this.runtime.snapshot().blockId && p.pid === process.pid, native: false, binding });
+        cwd: p.cwd, rawCwd: p.rawCwd, current: pane.blockId === this.runtime.snapshot().blockId && p.pid === process.pid, native: false, binding });
     }
     if (rows.length) {
       // Titles are display enrichment only. Never attribute a shell/stale title

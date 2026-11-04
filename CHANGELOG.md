@@ -2,6 +2,23 @@
 
 ## 0.1.0
 
+- Protect worktrees whose assume-unchanged/skip-worktree index entries can hide local edits, without changing those flags. Block tracked submodules and leftover submodule metadata before admitting a deletion batch; fail closed on incomplete index inspection.
+- Replace unbounded batch confirmation with a wrapped, scrollable target review and an explicit Cancel/Remove choice defaulting to Cancel. Keep confirmation inside the terminal height and disable deletion when its choices cannot fit.
+- Add Tab-accessible deletion-result details with full literal paths, branches, outcomes and reasons. Scroll long details and return to the existing filtered list without retrying or deleting anything.
+- Limit per-removal Git status/index rechecks to the selected target while retaining whole-batch preflight and fresh live-agent discovery. Add regression tests for dispatched cancellation, hidden edits, submodules, large confirmations and long unknown-outcome details.
+
+- Keep a dismissible deletion-results panel open after confirmed worktree batches, showing verified directory/registration removals, blocked/failed/unknown outcomes and unattempted targets. Verify Git registration and directory absence after successful exits; never label an unverified effect deleted or offer automatic retries. Show explicit cancellation feedback.
+
+- Spell out `CTRL-D delete` in the worktree footer instead of `^D remove`; plain D still filters, and Enter still opens the focused worktree.
+
+- Distinguish missing worktree directories from unreadable worktrees in `/rxw`: use neutral `Missing`/`Registration only` labels, a separate count, and sort existing worktrees first. Allow confirmed, targeted cleanup of missing prunable registrations through `git worktree remove -- <path>`, never global pruning. Recheck absence before removal, keep existing/prunable directories and locked entries protected, and label cleanup targets explicitly in confirmation.
+
+- Add Space marking to `/rxw`: show deletion checkboxes and a marked count, preserve marks across filtering/unchanged refreshes, and clear stale or newly protected marks. Ctrl+D confirms all marked paths, preflights the entire batch, then rechecks sequential removals; stop on the first failure/unknown outcome and report confirmed progress. Enter still opens the focused worktree; Alt+Space inserts a search separator.
+
+- Add `/rxw` (`/rxworktrees`) to browse the current repository's Git worktrees with the same shared tree picker as `/rxa`. Show branch/path/dirty status; Enter opens fresh Pi in a tab without task prompts or history transfer. Ctrl+D requires confirmation and rechecks identity, Git status and live Rex agents; protect main/current/bare/locked/prunable/dirty/unreadable worktrees, never force removal or delete branches, and treat interrupted writes as uncertain. Refresh only while open and add no model tool or default shortcut.
+
+- Add `/rxa` as a short alias for `/rxagents` and Ctrl+Alt+A to open the overlay directly. Support `PI_REX_AGENTS_KEY` overrides and `off`, forward them to child launches, and skip return-key conflicts with a warning. Shortcuts activate only after verified Rex TUI startup.
+
 - Remove intermediate tab/pane-count headings from `/rxagents` to save space. Nest agents directly under workspaces while retaining exact-pane navigation and searchable tab metadata.
 
 - Make `/rxagents` nesting explicit with workspace/agent tree guides and sticky workspace context. Paint a full opaque themed surface, including borders and padding, and restore base colors after inner style resets to prevent tool-result background leakage.

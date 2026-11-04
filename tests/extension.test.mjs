@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import piRex, { returnKey } from "../extensions/index.ts";
+import piRex, { agentsKey, returnKey } from "../extensions/index.ts";
 import { sandbox, world, uuid, binding } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
@@ -10,7 +10,8 @@ import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
 function fixture(t, overrides = {}, settings = {}) {
   const root = sandbox(t), w = world(), events = new Map(), tools = new Map(), commands = new Map(), shortcuts = [], entries = [], notices = [];
   const changes = { REX_SESSION: w.source.sessionId, REX_BLOCK: w.source.blockId, PI_REX_CLI: "/bin/echo",
-    PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined, ...overrides };
+    PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined,
+    PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, ...overrides };
   const old = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(changes)) value === undefined ? delete process.env[key] : process.env[key] = value;
   t.after(() => {
@@ -40,8 +41,8 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.ok(f.tools.has("rex_open_session"));
   assert.ok(f.tools.get("rex_start_pi").parameters.properties.sessionName);
   assert.equal(f.tools.get("rex_start_pi").executionMode, "sequential");
-  assert.deepEqual([...f.commands.keys()].sort(), ["rxagents", "rxbk", "rxh", "rxn", "rxt", "rxv", "rxwho"]);
-  assert.equal(f.shortcuts[0].key, "ctrl+alt+b");
+  assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxbk", "rxh", "rxn", "rxt", "rxv", "rxw", "rxwho", "rxworktrees"]);
+  assert.deepEqual(f.shortcuts.map(s => s.key), ["ctrl+alt+b", "ctrl+alt+a"]);
   assert.equal(f.w.created.length, 0);
 });
 test("non-Rex environments leave all Pi extension registries and bootstrap data untouched", async t => {
@@ -139,7 +140,7 @@ test("rex_jump opens a path in a fresh Pi tab without adding slash commands or n
   assert.equal(result.details.launch.placement, "tab");
   assert.equal(result.details.launch.startup.state, "bound");
   assert.equal(f.w.created.length, 1);
-  assert.deepEqual([...f.commands.keys()].sort(), ["rxagents", "rxbk", "rxh", "rxn", "rxt", "rxv", "rxwho"]);
+  assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxbk", "rxh", "rxn", "rxt", "rxv", "rxw", "rxwho", "rxworktrees"]);
 });
 test("rex_open_session reuses existing workspaces without Pi launch or task parameters", async t => {
   const f = fixture(t);
@@ -151,6 +152,48 @@ test("rex_open_session reuses existing workspaces without Pi launch or task para
   assert.equal(result.details.outcome, "existing");
   assert.equal(f.w.created.length, 0);
   assert.equal(f.entries.length, 1);
+});
+test("agents shortcut opens directly, registers once and becomes inert after shutdown", async t => {
+  const f = fixture(t);
+  let opened = 0;
+  f.ctx.ui.custom = async () => { opened++; return undefined; };
+  assert.equal(f.shortcuts.length, 0);
+  await f.events.get("session_start")({}, f.ctx);
+  const shortcut = f.shortcuts.find(s => s.key === "ctrl+alt+a");
+  await shortcut.action.handler(f.ctx);
+  assert.equal(opened, 1);
+  assert.equal(f.w.created.length, 0);
+  await f.events.get("session_tree")({}, f.ctx);
+  assert.equal(f.shortcuts.length, 2);
+  await shortcut.action.handler(f.ctx);
+  assert.equal(opened, 2);
+  await shortcut.action.handler({ ...f.ctx, mode: "rpc" });
+  await shortcut.action.handler({ ...f.ctx, sessionManager: { getSessionId: () => "changed" } });
+  assert.equal(opened, 2);
+  f.events.get("session_shutdown")({}, f.ctx);
+  const before = f.w.calls.length;
+  await shortcut.action.handler(f.ctx);
+  assert.equal(opened, 2);
+  assert.equal(f.w.calls.length, before);
+});
+test("agents shortcut customization, opt-out, invalid keys and return-key conflicts", async t => {
+  for (const [key, expected] of [["alt+shift+a", ["ctrl+alt+b", "alt+shift+a"]],
+    ["off", ["ctrl+alt+b"]], ["invalid", ["ctrl+alt+b"]], ["ctrl+alt+b", ["ctrl+alt+b"]]]) {
+    await t.test(key, async t => {
+      const f = fixture(t, { PI_REX_AGENTS_KEY: key });
+      await f.events.get("session_start")({}, f.ctx);
+      assert.deepEqual(f.shortcuts.map(s => s.key), expected);
+      assert.ok(f.commands.has("rxa"));
+      assert.ok(f.commands.has("rxagents"));
+    });
+  }
+});
+test("agents shortcut key validation uses the same format as the return key", () => {
+  assert.equal(agentsKey(), "ctrl+alt+a");
+  assert.equal(agentsKey("off"), undefined);
+  assert.equal(agentsKey("ctrl+shift+x"), "ctrl+shift+x");
+  for (const key of ["a", "cmd+q", "ctrl+alt+cmd+a", "invalid", "alt+ctrl+a"])
+    assert.throws(() => agentsKey(key), /PI_REX_AGENTS_KEY/);
 });
 test("return shortcut supports opt-out and rejects malformed modifier strings", () => {
   assert.equal(returnKey(), "ctrl+alt+b");

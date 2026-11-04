@@ -43,7 +43,9 @@ The package activates only when both `REX_SESSION` and `REX_BLOCK` contain valid
 | `/rxt [task]` | Fresh Pi in a tab |
 | `/rxbk` | Return to the exact live parent Pi conversation |
 | `/rxwho` | Inspect this conversation's identity and remembered child evidence |
-| `/rxagents` | Filter agent statuses across Rex panes and jump to an exact live pane |
+| `/rxa` (or `/rxagents`) | Filter agent statuses across Rex panes and jump to an exact live pane |
+| `/rxw` (or `/rxworktrees`) | Browse this repository's Git worktrees, open one in fresh Pi, or safely remove one |
+| **Ctrl+Alt+A** | Same as `/rxa`, unless disabled or changed |
 | **Ctrl+Alt+B** | Same as `/rxbk`, unless disabled or changed |
 
 Commands accept plain task text, not shell options. All launches are **fresh conversations**. Slash launch commands are independent tasks in their specified location; use the structured tool for related tasks/reviewers.
@@ -52,7 +54,9 @@ The parent's conversation stays open. No source Rex session is renamed. Explicit
 
 All Pi launches use Rex's `--keep-open`: quitting the agent retains its terminal, so an agent exit alone does not remove the last pane and its workspace. This applies to slash launches, `rex_start_pi`, `rex_jump`, and new workspaces from `rex_open_session`. It does not start a replacement shell or restart Pi. You can still close the pane explicitly; closing the last pane can remove the session. Existing panes are unchanged, and this does not provide restoration after a Rex server restart.
 
-## Agents overlay: `/rxagents`
+## Agents overlay: `/rxa`
+
+Use `/rxa`, `/rxagents`, or **Ctrl+Alt+A**. Set `PI_REX_AGENTS_KEY` before starting Pi to change the key or use `off` to disable it. A key conflicting with `PI_REX_RETURN_KEY` is skipped with a warning; both slash commands remain available.
 
 Open a small Pi overlay listing agents across local Rex sessions, tabs, **splits**, and floating panes. Agents sharing a tab remain separate rows, identified by pane and process rather than the tab's aggregate indicator.
 
@@ -66,7 +70,24 @@ Open a small Pi overlay listing agents across local Rex sessions, tabs, **splits
 
 Rex also documents **Show each process in tabs** under Settings → Notifications → Program Activity, which can expose per-pane activity in its own Activity view. The overlay provides a separate searchable jump list without changing that setting.
 
-This is a transient navigation UI, not another status protocol, task-completion tracker, or source of execution permission. It adds no default keyboard shortcut and sends no messages or model prompts.
+This is a transient navigation UI, not another status protocol, task-completion tracker, or source of execution permission. The shortcut opens the overlay directly and sends no messages or model prompts.
+
+## Worktree overlay: `/rxw`
+
+Use `/rxw` or `/rxworktrees` from a local Git checkout. The panel shares the agents overlay's search field, repository tree, soft selection, right-aligned statuses, sticky group context, and opaque themed surface.
+
+- Each row shows its branch (or detached HEAD), directory, and `Clean`, `Dirty`, `Missing`, or `Unavailable` status. Existing worktrees sort before missing registrations; the header counts missing entries separately from read failures. Main/current worktrees, locks, prunable entries, and live Rex agent counts appear in the details. Type to filter; use Pi's configured selection keys to move, Esc/Ctrl+C to close, and Ctrl+R to refresh. Reads refresh every five seconds while open; closing cancels pending reads and stops the timer.
+- **Enter** closes the picker, rechecks the worktree, and opens **one fresh Pi conversation in a new tab** at that directory, using the existing guarded launcher and `/rxbk` navigation. It does not change this conversation's cwd, send a task prompt, transfer history, or claim task readiness/completion. Dirty worktrees may be opened. Unknown creation outcomes are not retried or cleaned up.
+- **Space** toggles a deletion mark on the focused worktree: `[x]` marked, `[ ]` available, `[-]` protected. The header counts all marks, including worktrees hidden by the filter. Marks survive filtering and unchanged refreshes, but clear when a worktree disappears, changes identity/HEAD/branch, becomes protected, or a read fails. Use **Alt+Space** to insert a space in the search field. Marks are not saved when the panel closes; Enter still opens only the focused row, regardless of marks.
+- **Ctrl+D** (shown as `CTRL-D delete` in the footer) requests removal of **all marked worktrees**, never the focused row as a fallback. With no marks it leaves the panel open. One bounded confirmation lists every exact target path, wrapping long paths without truncation. Use the configured selection Up/Down and PageUp/PageDown keys to scroll, or Home/End for the first/last page. **Cancel is selected by default**; Tab (or Left/Right) chooses Remove, then the configured confirmation key submits. Esc/Ctrl+C cancels. Terminals too small to display the choices cannot authorize deletion. The picker closes before confirmation; afterward, the whole batch gets fresh safety checks before the first removal, then each worktree is checked again immediately before its sequential removal. Per-effect Git status/index checks inspect only that target, not every remaining worktree. Main, bare, current, locked, dirty, and unreadable worktrees cannot be removed. A prunable entry is eligible only when its directory is confirmed absent; prunable entries whose directories still exist remain protected. Staged, unstaged, untracked, ignored, and submodule changes count as dirty. Known live Rex agents in the worktree or its descendants also block removal; incomplete agent discovery blocks all removal rather than guessing.
+- **Index and submodule protections:** a `Clean` status alone does not prove removal is safe. Worktrees with assume-unchanged or skip-worktree index entries are protected, even when those flags currently hide no changes (including sparse-checkout entries). The extension never clears flags or rewrites the index. Tracked submodules and leftover submodule metadata also block removal because non-force Git removal may refuse them. These checks run during listing, whole-batch preflight and each target's final check; unreadable, incomplete or oversized index inspection fails closed. Index reads are bounded to 8 MiB. Protected clean worktrees remain openable when their status is readable.
+- **Missing registrations** show `Registration only` and can be marked for cleanup when Git reports them prunable. The confirmation distinguishes registration-only cleanup from directory removal. The directory must still be absent after confirmation and immediately before the effect; reappeared paths, dangling symlinks, locks, and incomplete agent discovery block cleanup. Enter never launches Pi at a missing path.
+- After a confirmed batch settles, a **Deletion results** panel stays open until **Enter** or **Esc**. It shows each target as `Deleted` (directory removal), `Cleaned` (missing registration), `Blocked`, `Failed`, `Unknown`, or `Not attempted`, with a verified-removal count. Type to filter and use selection Up/Down to review targets. **Tab** opens the selected result's full, wrapped absolute path, branch, outcome and complete reason, including text beyond the compact row's truncation. Scroll that detail view with Up/Down, PageUp/PageDown or Home/End; Enter/Esc returns to the same filtered result. Enter/Esc in the result list acknowledges the batch. This is review only, with no retry or delete actions. A Git success exit alone is not enough: both registration and directory must be absent before a removal is counted as verified. Failed commands may have partially removed files; unknown results require Git inspection before any deliberate retry. Cancelling confirmation reports that nothing was removed. Results close on source-session replacement/shutdown rather than appearing in another conversation.
+- Removal uses `git worktree remove` with the exact selected path, **never force**. For a missing directory, this removes only that registration and leaves unselected stale entries untouched. It does not delete branches, unlock a worktree, run global `git worktree prune`, manually remove Git metadata, kill agents, or create replacement resources. The batch stops on the first rejection, cancellation, or uncertain result and reports how many removals were confirmed; it is not atomic and completed removals are not rolled back. Interrupted removal reports an unknown outcome and requires inspection before any deliberate retry.
+
+Agent protection covers recognized local agents visible through Rex, not agents running in other terminals or remote hosts. Git/process/filesystem checks are preflights, not an atomic lock against another process starting or writing immediately afterward. Only remove a worktree you know is unused.
+
+Git paths are read with NUL-delimited porcelain output and passed as literal arguments. Native Git hooks and filesystem-monitor hooks are disabled for these operations. No extra model tool, default keyboard shortcut, worktree creation, branch management, or persistent panel is added.
 
 ## Terminal tool and personal commands: separate interfaces
 
@@ -246,8 +267,9 @@ Set environment variables **before starting Pi**:
 | `PI_REX_CLIENT` | Pane owner, otherwise one unambiguous app | Full Rex client ID for app selection |
 | `PI_REX_STATE_DIR` | `<Pi agent dir>/pi-rex/bindings` | Private local binding directory; symlink components are refused |
 | `PI_REX_RETURN_KEY` | `ctrl+alt+b` | `off`, or ordered ctrl/alt/shift modifiers plus a letter/digit |
+| `PI_REX_AGENTS_KEY` | `ctrl+alt+a` | Open the agents overlay; same format as `PI_REX_RETURN_KEY`, including `off` |
 
-The Pi agent directory honors `PI_CODING_AGENT_DIR`. Children share that directory and its settings/auth files. Their PATH is explicitly taken from the parent. Environment-only provider credentials are not explicitly forwarded; the child otherwise inherits the Rex server's environment. No credential values are placed in launch arguments by this package.
+The Pi agent directory honors `PI_CODING_AGENT_DIR`. Children share that directory and its settings/auth files. Their PATH and explicitly configured return/agents shortcut overrides are taken from the parent. Environment-only provider credentials are not explicitly forwarded; the child otherwise inherits the Rex server's environment. No credential values are placed in launch arguments by this package.
 
 An executable override is one executable, not shell code. Wrappers must forward Pi's CLI flags, including `--session-id`, `--extension` and the prompt separator `--`. Relative executable paths resolve in the parent cwd before the child changes directory.
 
@@ -271,7 +293,7 @@ npm run typecheck
 npm run pack:check
 ```
 
-The automated tests use fake Rex responses and temporary private state. They cover launch fencing, cancellation/lost replies, exact identity, process checks, reload/fork handling, competing leases, target replacement, argv safety and symlink rejection.
+The automated tests use fake Rex responses and temporary private state/Git repositories. They cover launch fencing, cancellation/lost replies, exact identity, process checks, reload/fork handling, competing leases, target replacement, argv safety and symlink rejection. Worktree coverage includes hidden index flags, tracked edits, submodules, whole-batch preflight, cancellation after removal dispatch, target-only rechecks, 256-target confirmation scrolling, and full unknown-outcome details with long paths/reasons. They do not launch real Pi children or exercise live Rex mutations.
 
 An explicit native smoke test is also available:
 

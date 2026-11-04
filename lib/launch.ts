@@ -39,6 +39,7 @@ export interface LaunchConfig {
   path: string;
   client?: string;
   returnKey?: string;
+  agentsKey?: string;
   startupTimeoutMs?: number;
 }
 function text(value: unknown, name: string, max: number): asserts value is string {
@@ -125,6 +126,7 @@ export class Launcher {
       "PI_REX_BINARY=" + binary, "PI_REX_STATE_DIR=" + this.config.stateDirectory,
       ...(this.config.client ? ["PI_REX_CLIENT=" + this.config.client] : []),
       ...(this.config.returnKey !== undefined ? ["PI_REX_RETURN_KEY=" + this.config.returnKey] : []),
+      ...(this.config.agentsKey !== undefined ? ["PI_REX_AGENTS_KEY=" + this.config.agentsKey] : []),
       BOOTSTRAP_ENV + "=" + encodeBootstrap(seed), binary, ...piArguments(options, seed.piSessionId, extension)];
     this.runtime.assert(own); combined.throwIfAborted();
     const result: LaunchResult = { launchId: id, creation: "unknown", placement, identity: {

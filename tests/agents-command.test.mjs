@@ -8,7 +8,7 @@ import { active } from "./fixtures.mjs";
 async function setup(t) {
   const a = await active(t), commands = new Map(), notices = [];
   let runtime = a.runtime, overlay, opened = 0;
-  const cancel = registerAgentsCommand({ registerCommand: (name, command) => commands.set(name, command) }, () => runtime);
+  const { cancel, open } = registerAgentsCommand({ registerCommand: (name, command) => commands.set(name, command) }, () => runtime);
   const ctx = { ...a.ctx, ui: { ...a.ctx.ui, notify: (...args) => notices.push(args),
     custom: async (factory, options) => {
       assert.equal(options.overlay, true); opened++;
@@ -18,7 +18,7 @@ async function setup(t) {
       });
     } } };
   return { ...a, ctx, cancel, commands, notices, get overlay() { return overlay; }, get opened() { return opened; },
-    disable: () => { runtime = undefined; }, open: () => commands.get("rxagents").handler("", ctx) };
+    disable: () => { runtime = undefined; }, open: () => open(ctx) };
 }
 async function until(predicate) {
   for (let n = 0; n < 100; n++) { if (predicate()) return; await tick(); }
@@ -34,6 +34,18 @@ test("opening only reads, double open is ignored, Escape cancels and reopening w
   a.overlay.handleInput("\x1b"); await running;
   assert.equal(a.w.focusCalls ?? 0, 0);
   const again = a.open(); await until(() => a.opened === 2 && a.overlay?.selectedRow());
+  a.overlay.handleInput("\x1b"); await again;
+});
+test("short and long commands share the same overlay and reentry guard", async t => {
+  const a = await setup(t);
+  assert.deepEqual([...a.commands.keys()], ["rxa", "rxagents"]);
+  const running = a.commands.get("rxa").handler("", a.ctx);
+  await until(() => a.overlay?.selectedRow());
+  await a.commands.get("rxagents").handler("", a.ctx);
+  assert.equal(a.opened, 1);
+  a.overlay.handleInput("\x1b"); await running;
+  const again = a.commands.get("rxagents").handler("", a.ctx);
+  await until(() => a.opened === 2 && a.overlay?.selectedRow());
   a.overlay.handleInput("\x1b"); await again;
 });
 test("Enter dismisses the overlay before exact-pane focus", async t => {

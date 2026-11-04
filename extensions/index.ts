@@ -15,6 +15,7 @@ import { registerJumpTool } from "./jump.ts";
 import { SessionOpener } from "../lib/sessions.ts";
 import { registerSessionTool } from "./sessions.ts";
 import { registerAgentsCommand } from "./agents.ts";
+import { registerWorktreesCommand } from "./worktrees.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 
 const schema = Type.Object({
@@ -41,12 +42,18 @@ function launchText(result: LaunchResult): string {
     + (result.startup.state === "bound" ? "Exact Pi initialization binding observed; prompt processing, task readiness and completion are not confirmed. " : result.startup.reason + " ")
     + (result.warning ? result.warning + " " : "") + "Use /rxbk in the child to return to the parent. No history was copied.";
 }
-export function returnKey(value: string | undefined): string | undefined {
+function shortcutKey(value: string | undefined, fallback: string, variable: string): string | undefined {
   if (value === "off") return undefined;
-  const key = value ?? "ctrl+alt+b";
+  const key = value ?? fallback;
   if (!/^(?:ctrl\+)?(?:alt\+)?(?:shift\+)?[a-z0-9]$/.test(key) || !key.includes("+"))
-    throw new Error("PI_REX_RETURN_KEY must be off or ctrl/alt/shift modifiers plus a letter/digit");
+    throw new Error(variable + " must be off or ctrl/alt/shift modifiers plus a letter/digit");
   return key;
+}
+export function returnKey(value?: string): string | undefined {
+  return shortcutKey(value, "ctrl+alt+b", "PI_REX_RETURN_KEY");
+}
+export function agentsKey(value?: string): string | undefined {
+  return shortcutKey(value, "ctrl+alt+a", "PI_REX_AGENTS_KEY");
 }
 
 export default function piRex(pi: ExtensionAPI): void {
@@ -54,11 +61,12 @@ export default function piRex(pi: ExtensionAPI): void {
   if (!rexId(process.env.REX_SESSION, "session") || !rexId(process.env.REX_BLOCK, "block")) return;
 
   let runtime: Runtime | undefined;
-  const closeAgents = registerAgentsCommand(pi, () => runtime);
+  const agents = registerAgentsCommand(pi, () => runtime);
   let launcher: Launcher | undefined;
   let terminal: TerminalOpener | undefined;
   let jumper: ProjectJumper | undefined;
   let sessions: SessionOpener | undefined;
+  const worktrees = registerWorktreesCommand(pi, () => ({ runtime, launcher }));
   let registered = false;
   let shortcutRegistered = false;
   let consumed = false;
@@ -67,7 +75,7 @@ export default function piRex(pi: ExtensionAPI): void {
   const stateDirectory = resolve(process.env.PI_REX_STATE_DIR ?? join(agentDirectory, "pi-rex", "bindings"));
   const extension = fileURLToPath(import.meta.url);
   const stop = () => {
-    activation++; closeAgents(); runtime?.stop(); runtime = undefined;
+    activation++; agents.cancel(); worktrees.cancel(); runtime?.stop(); runtime = undefined;
     launcher = undefined; terminal = undefined; jumper = undefined; sessions = undefined;
   };
 
@@ -90,19 +98,30 @@ export default function piRex(pi: ExtensionAPI): void {
       if (generation !== activation) { active.stop(); return; }
       launcher = new Launcher(active, { extension, agentDirectory, stateDirectory,
         piBinary: process.env.PI_REX_BINARY ?? "pi", path: process.env.PATH ?? "",
-        client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY });
+        client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY, agentsKey: process.env.PI_REX_AGENTS_KEY });
       terminal = new TerminalOpener(active);
       const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
       jumper = new ProjectJumper(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal));
       sessions = new SessionOpener(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal), process.env.PI_REX_CLIENT);
       if (!shortcutRegistered) {
         shortcutRegistered = true;
+        let backKey: string | undefined;
         try {
           const key = returnKey(process.env.PI_REX_RETURN_KEY);
-          if (key) pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
-            description: "Return to the originating Pi conversation in Rex", handler: back,
-          });
+          if (key) {
+            pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
+              description: "Return to the originating Pi conversation in Rex", handler: back,
+            });
+            backKey = key;
+          }
         } catch (error) { console.warn("pi-rex: " + errorText(error) + "; /rxbk remains available"); }
+        try {
+          const key = agentsKey(process.env.PI_REX_AGENTS_KEY);
+          if (key && key === backKey) throw new Error("PI_REX_AGENTS_KEY conflicts with PI_REX_RETURN_KEY");
+          if (key) pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
+            description: "Show agents in Rex", handler: agents.open,
+          });
+        } catch (error) { console.warn("pi-rex: " + errorText(error) + "; /rxa remains available"); }
       }
       if (!registered) {
         registered = true;

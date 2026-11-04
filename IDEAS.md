@@ -11,10 +11,10 @@
 
 ## Worktree management overlay
 
-- A small Pi overlay to list Git worktrees, switch between them, and delete them.
-- Show each worktree's path, branch, and dirty status.
-- Define switching semantics: open Pi in the selected worktree or change the current conversation's working directory.
-- Require confirmation before deletion; protect the main worktree and worktrees with uncommitted changes or active agents.
+- First slice implemented as `/rxw` (`/rxworktrees`), sharing the agents panel's tree picker and styling.
+- Show each worktree's path, branch/detached HEAD, dirty status, and main/current/agent context.
+- Enter opens fresh Pi in the selected worktree in a new tab; the current conversation's cwd and history are unchanged.
+- Space toggles deletion marks; Ctrl+D confirms the marked batch and rechecks each removal, stopping on failure or uncertainty. Protect main/current/bare/locked worktrees and prunable entries whose directories still exist; allow targeted cleanup of confirmed-missing registrations. Protect uncommitted/untracked/ignored changes, and known live Rex agents. Incomplete discovery blocks deletion.
 
 ## Agents status overlay
 
