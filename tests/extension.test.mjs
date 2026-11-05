@@ -6,7 +6,7 @@ import rexpi, { agentsKey, returnKey, messagesStopKey } from "../extensions/inde
 import { sandbox, world, uuid, binding, server } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
 import { BOOTSTRAP_ENV, childBootstrap, decodeBootstrap, encodeBootstrap } from "../lib/state.ts";
-import { CAPABILITY_GRANT_ENV, MAX_CAPABILITY_DELEGATION_DEPTH, decodeCapabilityGrant, encodeCapabilityGrant } from "../lib/launch.ts";
+import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, MAX_CAPABILITY_DELEGATION_DEPTH, decodeCapabilityDeadline, decodeCapabilityGrant, encodeCapabilityGrant } from "../lib/launch.ts";
 import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
 
 const enforcementGrant = (change = {}) => ({ tools: ["rex_start_pi"], readPaths: ["/repo"], writePaths: ["/repo/out"],
@@ -17,7 +17,7 @@ function fixture(t, overrides = {}, settings = {}) {
   const changes = { REX_SESSION: w.source.sessionId, REX_BLOCK: w.source.blockId, PI_REX_CLI: "/bin/echo",
     PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined,
     PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, PI_REX_MESSAGES_STOP_KEY: undefined,
-    PI_REX_AGENT_HANDLE: undefined, PI_REX_CAPABILITY_GRANT: undefined, ...overrides };
+    PI_REX_AGENT_HANDLE: undefined, PI_REX_CAPABILITY_GRANT: undefined, PI_REX_CAPABILITY_DEADLINE: undefined, ...overrides };
   const old = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(changes)) value === undefined ? delete process.env[key] : process.env[key] = value;
   t.after(() => {
@@ -210,6 +210,8 @@ test("rex_start_pi requires and propagates an explicit attenuated child grant", 
   assert.equal(result.details.startup.state, "bound");
   const raw = f.w.created[0].find(arg => arg.startsWith(CAPABILITY_GRANT_ENV + "="));
   assert.deepEqual(decodeCapabilityGrant(raw.slice(raw.indexOf("=") + 1)), childGrant);
+  const rawDeadline = f.w.created[0].find(arg => arg.startsWith(CAPABILITY_DEADLINE_ENV + "="));
+  assert.ok(decodeCapabilityDeadline(rawDeadline.slice(rawDeadline.indexOf("=") + 1)) > Date.now());
   await f.commands.get("rxn").handler("must not launch", f.ctx);
   assert.equal(f.w.created.length, 1, "slash commands cannot create an ungoverned Pi");
   assert.match(f.notices.at(-1)[0], /capability-granted runtime/);
@@ -275,6 +277,19 @@ test("malformed child grant input is consumed and fails closed", async t => {
   assert.equal(f.w.created.length, 0);
   assert.match(f.notices.at(-1)[0], /Invalid capability grant bootstrap/);
   assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx).block, true);
+});
+
+test("a stray or malformed deadline envelope is consumed and fails closed", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
+  for (const overrides of [{ PI_REX_CAPABILITY_DEADLINE: String(Date.now() + 1000) },
+    { PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(enforcementGrant()), PI_REX_CAPABILITY_DEADLINE: "tomorrow" }]) {
+    const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), ...overrides });
+    await f.events.get("session_start")({}, f.ctx);
+    assert.equal(f.tools.size, 0);
+    assert.equal(process.env[CAPABILITY_DEADLINE_ENV], undefined);
+    assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx).block, true);
+  }
 });
 
 test("configured commands register only after verification and do not run during setup", async t => {

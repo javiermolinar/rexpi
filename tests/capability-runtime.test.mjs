@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { attenuateCapabilityGrant, CapabilityRuntime } from "../lib/capability-runtime.ts";
+import { capabilityDeadline } from "../lib/launch.ts";
 
 function grant(change = {}) {
   return { tools: ["read", "custom_tool", "rex_start_pi", "rex_message_send", "rex_return_to_parent"],
@@ -33,6 +34,7 @@ function fakeClock() {
         due.callback();
       }
     },
+    elapse(ms) { now += ms; },
   };
 }
 function context() {
@@ -80,6 +82,15 @@ test("a valid child is explicitly attenuated and propagated without mutating par
   assert.deepEqual(derived.grant.tools, ["read"], "the validated child is a private parsed copy");
 });
 
+test("relative delegated paths stay anchored to the parent cwd, not the child launch cwd", t => {
+  const { capability } = runtime(t, grant({ readPaths: ["."], writePaths: ["."] }));
+  const derived = capability.deriveChildOptions({ related: true, cwd: "/tmp/other",
+    grant: child({ readPaths: ["."], writePaths: ["."], delegation: { maxDepth: 1 } }) });
+  assert.deepEqual(derived.grant.readPaths, [process.cwd()]);
+  assert.deepEqual(derived.grant.writePaths, [process.cwd()]);
+  assert.equal(derived.grant.readPaths[0].startsWith("/tmp/other"), false);
+});
+
 test("every child authority expansion vector is denied before launch", t => {
   const parent = grant();
   const invalid = [
@@ -104,6 +115,26 @@ test("child timeout is bounded by the remaining whole-parent timeout", t => {
   assert.throws(() => capability.deriveChildGrant(child({ timeoutMs: 601 })), /remaining parent timeout/);
   clock.advance(600);
   assert.throws(() => capability.deriveChildGrant(child()), /expired/);
+});
+
+test("an inherited absolute deadline bounds delayed child consumption", t => {
+  const parent = runtime(t, grant({ timeoutMs: 1000 }));
+  parent.clock.advance(400);
+  const derived = parent.capability.deriveChildOptions({ related: true,
+    grant: child({ delegation: { maxDepth: 1 }, timeoutMs: 500 }) });
+  const deadline = capabilityDeadline(derived.grant);
+  assert.equal(deadline, 1000);
+  const clock = fakeClock(); clock.elapse(900);
+  const capability = new CapabilityRuntime(derived.grant, { clock, deadlineAt: deadline });
+  t.after(() => capability.revoke());
+  assert.equal([...clock.timers.values()][0].at, 1000);
+  clock.elapse(100);
+  assert.match(capability.guardTool("read", {}).reason, /expired/);
+  const lateClock = fakeClock(); lateClock.elapse(1000);
+  const late = new CapabilityRuntime(derived.grant, { clock: lateClock, deadlineAt: deadline });
+  t.after(() => late.revoke());
+  assert.equal(lateClock.timers.size, 0);
+  assert.match(late.guardTool("read", {}).reason, /expired/);
 });
 
 test("returnResults=false gates only result sends; progress, question, and focus return remain tool-governed", t => {
@@ -145,6 +176,18 @@ test("one unref'd consumption timer aborts current work and denies future turns 
   assert.match(capability.guardTool("read", {}).reason, /expired/);
   assert.equal(clock.timers.size, 0);
   assert.deepEqual(notices, ["Capability grant expired; aborted current work and denied future turns"]);
+});
+
+test("tool and turn boundaries expire even when the timer callback is delayed", t => {
+  const { capability, clock } = runtime(t, grant({ turns: 2, timeoutMs: 100 }));
+  const ctx = context();
+  assert.equal(capability.startTurn(ctx), true);
+  clock.elapse(100);
+  assert.equal(clock.timers.size, 1, "the due timer has not fired");
+  assert.equal(capability.startTurn(ctx), false);
+  assert.equal(ctx.aborts, 1);
+  assert.equal(clock.timers.size, 0);
+  assert.match(capability.guardTool("read", {}).reason, /expired/);
 });
 
 test("revocation clears the only timer and permanently denies the old incarnation", t => {

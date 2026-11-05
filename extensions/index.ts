@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { executable } from "../lib/executable.ts";
-import { CAPABILITY_GRANT_ENV, decodeCapabilityGrant, Launcher, MAX_CAPABILITY_DELEGATION_DEPTH,
+import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, decodeCapabilityDeadline, decodeCapabilityGrant, Launcher, MAX_CAPABILITY_DELEGATION_DEPTH,
   MAX_CAPABILITY_PATH_LENGTH, MAX_CAPABILITY_PATHS, MAX_CAPABILITY_TIMEOUT_MS, MAX_CAPABILITY_TOOL_LENGTH,
   MAX_CAPABILITY_TOOLS, MAX_CAPABILITY_TURNS, type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
 import { CapabilityRuntime } from "../lib/capability-runtime.ts";
@@ -131,8 +131,9 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (allowBootstrap && !consumed) {
         consumed = true;
         const raw = process.env[BOOTSTRAP_ENV], rawAgent = process.env[AGENT_BOOTSTRAP_ENV];
-        const rawGrant = process.env[CAPABILITY_GRANT_ENV];
+        const rawGrant = process.env[CAPABILITY_GRANT_ENV], rawDeadline = process.env[CAPABILITY_DEADLINE_ENV];
         delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV]; delete process.env[CAPABILITY_GRANT_ENV];
+        delete process.env[CAPABILITY_DEADLINE_ENV];
         if (raw) seed = decodeBootstrap(raw);
         if (rawAgent) {
           if (!seed) throw new Error("Agent handle bootstrap requires a related launch bootstrap");
@@ -140,15 +141,17 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
           if (agentSeed.taskId !== seed.taskId || agentSeed.conversationId !== seed.conversationId)
             throw new Error("Agent handle bootstrap does not match the decoded child seed");
         }
-        if (rawGrant !== undefined) {
+        if (rawGrant !== undefined || rawDeadline !== undefined) {
           capabilityFailure = "Capability grant bootstrap was rejected; all tool authority is denied";
           if (!seed) throw new Error("Capability grant bootstrap requires a launch bootstrap");
           if (!seed.origin || seed.taskId !== seed.origin.taskId)
             throw new Error("Capability grant bootstrap requires a related launch");
+          if (rawGrant === undefined) throw new Error("Capability deadline bootstrap requires a grant");
+          const deadlineAt = rawDeadline === undefined ? undefined : decodeCapabilityDeadline(rawDeadline);
           // Consume and validate launch metadata once. Do not expose it to orientation or restored entries.
           // The sole whole-grant timer starts here, before any asynchronous startup work.
           capabilityContext = ctx;
-          capability = new CapabilityRuntime(decodeCapabilityGrant(rawGrant), { onNotice: message => {
+          capability = new CapabilityRuntime(decodeCapabilityGrant(rawGrant), { cwd: ctx.cwd, deadlineAt, onNotice: message => {
             if (capabilityContext?.hasUI) capabilityContext.ui.notify(message, "warning");
           } });
           capability.attachContext(ctx);

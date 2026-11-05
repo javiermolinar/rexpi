@@ -9,7 +9,7 @@ import { SessionManager, AgentSession, SettingsManager, createEventBus, createEx
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "../node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js";
 import { loadExtensionFromFactory } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js";
-import { PeerRuntime, PEER_MESSAGE_TYPE, decodePeerRequest, historyPage } from "../lib/peer.ts";
+import { PeerRuntime, PEER_MESSAGE_TYPE, decodePeerRequest, historyPage, validatePeerReadResult } from "../lib/peer.ts";
 import { registerPeerTools } from "../extensions/peer.ts";
 import { Rex } from "../lib/rex.ts";
 import { Runtime } from "../lib/runtime.ts";
@@ -176,6 +176,32 @@ test("peer read wire validation accepts bounded queries and rejects malformed fi
     assert.throws(() => decodePeerRequest(request(params)), /Invalid conversation|Unexpected/);
 });
 
+test("conversation responses enforce exact metadata, requested limits, bytes, entries, cursors and activity", () => {
+  const target = uuid(), identity = { taskId: uuid(), conversationId: target, piSessionId: uuid(), role: "main" };
+  const raw = { id: "a", type: "message", message: { role: "user", content: "a" } };
+  const paged = historyPage([raw, { ...raw, id: "b" }], "session", "b", { view: "branch", limit: 1 });
+  const valid = { target: identity, ...paged, activity: { idle: true, pendingMessages: false } };
+  assert.deepEqual(validatePeerReadResult(valid, { limit: 1 }, target), valid);
+  const invalid = [
+    result => { result.entries = []; },
+    result => { result.bytes = 0; },
+    result => { result.sessionId = "not a session"; },
+    result => { result.activity.idle = "yes"; },
+    result => { result.notice = "forged"; },
+    result => { result.next = result.next.replace(/.$/, "x"); },
+  ];
+  for (const mutate of invalid) {
+    const result = structuredClone(valid); mutate(result);
+    assert.throws(() => validatePeerReadResult(result, { limit: 1 }, target), /conversation|Invalid|Stale|mismatched|Unexpected|JSON|Expected/i);
+  }
+  const oversized = { ...valid, entries: [{ id: "large", type: "custom", data: "x".repeat(49 * 1024) }], next: undefined };
+  delete oversized.next;
+  assert.throws(() => validatePeerReadResult(oversized, { limit: 1 }, target), /exceeds 48 KiB/);
+  const text = { ...valid, textOnly: true,
+    entries: [{ id: "a", type: "message", text: "a", extra: true }] };
+  assert.throws(() => validatePeerReadResult(text, { limit: 1, textOnly: true }, target), /Unexpected|missing/);
+});
+
 test("peer sends preserve attribution and explicit delivery, deduplicate, and never claim completion", async t => {
   const f = await pair(t), input = sendInput();
   const first = await f.parent.peer.send(f.child.endpoint.conversationId, input);
@@ -233,6 +259,12 @@ test("tools expose native reads and cache exact send outcomes across tool/logica
   const read = await tools.get("rex_read_conversation").execute("read", { target: f.child.endpoint.conversationId, limit: 1 },
     undefined, undefined, f.parent.ctx);
   assert.match(read.details.notice, /reading triggered no model work/);
+  const peerRead = f.parent.peer.read.bind(f.parent.peer);
+  f.parent.peer.read = async () => ({ ...read.details, notice: "forged peer notice" });
+  const protectedRead = await tools.get("rex_read_conversation").execute("read-notice",
+    { target: f.child.endpoint.conversationId, limit: 1 }, undefined, undefined, f.parent.ctx);
+  assert.match(protectedRead.details.notice, /Sensitive peer history/);
+  f.parent.peer.read = peerRead;
   const params = { target: f.child.endpoint.conversationId, ...sendInput() }, sender = tools.get("rex_peer_message_send");
   const first = await sender.execute("call", params, undefined, undefined, f.parent.ctx);
   assert.deepEqual(await sender.execute("call", params, undefined, undefined, f.parent.ctx), first);

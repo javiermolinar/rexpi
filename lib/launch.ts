@@ -16,6 +16,7 @@ import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, typ
 import type { AgentRuntime } from "./agent-runtime.ts";
 
 export const CAPABILITY_GRANT_ENV = "PI_REX_CAPABILITY_GRANT";
+export const CAPABILITY_DEADLINE_ENV = "PI_REX_CAPABILITY_DEADLINE";
 export const MAX_CAPABILITY_TOOLS = 64;
 export const MAX_CAPABILITY_PATHS = 64;
 export const MAX_CAPABILITY_TOOL_LENGTH = 128;
@@ -101,6 +102,20 @@ export function decodeCapabilityGrant(raw: string): CapabilityGrant {
     throw new Error("Invalid capability grant bootstrap");
   try { return parseCapabilityGrant(JSON.parse(Buffer.from(raw, "base64url").toString("utf8"))); }
   catch (error) { throw new Error("Invalid capability grant bootstrap: " + (error instanceof Error ? error.message : String(error))); }
+}
+
+const inheritedDeadlines = new WeakMap<CapabilityGrant, number>();
+/** Internal absolute expiry metadata; never part of the model-visible grant or identity schema. */
+export function inheritCapabilityDeadline(grant: CapabilityGrant, deadlineAt: number): void {
+  if (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0) throw new Error("Invalid inherited capability deadline");
+  inheritedDeadlines.set(grant, deadlineAt);
+}
+export function capabilityDeadline(grant: CapabilityGrant): number | undefined { return inheritedDeadlines.get(grant); }
+export function decodeCapabilityDeadline(raw: string): number {
+  if (typeof raw !== "string" || !/^[1-9][0-9]{0,15}$/.test(raw)) throw new Error("Invalid capability deadline bootstrap");
+  const deadline = Number(raw);
+  if (!Number.isSafeInteger(deadline)) throw new Error("Invalid capability deadline bootstrap");
+  return deadline;
 }
 
 export interface LaunchOptions {
@@ -289,6 +304,8 @@ export class Launcher {
       ...(this.config.messagesStopKey !== undefined ? ["PI_REX_MESSAGES_STOP_KEY=" + this.config.messagesStopKey] : []),
       BOOTSTRAP_ENV + "=" + encodeBootstrap(seed),
       ...(options.grant !== undefined ? [CAPABILITY_GRANT_ENV + "=" + encodeCapabilityGrant(options.grant)] : []),
+      ...(options.grant !== undefined && capabilityDeadline(options.grant) !== undefined
+        ? [CAPABILITY_DEADLINE_ENV + "=" + capabilityDeadline(options.grant)] : []),
       ...(handle ? [AGENT_BOOTSTRAP_ENV + "=" + encodeAgentBootstrap(handle)] : []),
       binary, ...piArguments(taskOptions, seed.piSessionId, extension)];
     this.runtime.assert(own); combined.throwIfAborted();

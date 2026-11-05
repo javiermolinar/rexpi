@@ -36,7 +36,7 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
       signal?.throwIfAborted();
       const { target: _target, ...input } = params;
       const result = await active(ctx.sessionManager.getSessionId()).read(params.target, input, signal);
-      const details = { notice: readNotice, ...result };
+      const details = { ...result, notice: readNotice };
       return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });

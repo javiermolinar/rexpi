@@ -43,7 +43,7 @@ interface RootPin extends GrantRoot {
   directory: boolean;
 }
 interface ExistingTarget { canonical: string; identity: Identity; nlink: number }
-interface CreatedPath { path: string; identity: Identity }
+interface CreatedPath { path: string; identity?: Identity }
 interface CallState {
   tool: "read" | "write" | "edit";
   createdFiles: CreatedPath[];
@@ -304,9 +304,11 @@ export class CapabilityPathCoordinator {
         this.assertActive("write");
         try {
           await this.fs.mkdir(current, { mode: 0o777 });
+          const createdPath: CreatedPath = { path: current };
+          state.createdDirectories.push(createdPath);
           const created = await this.fs.lstat(current);
+          createdPath.identity = identity(created);
           if (!created.isDirectory() || created.isSymbolicLink()) throw denied("created parent is not a real directory");
-          state.createdDirectories.push({ path: current, identity: identity(created) });
           stat = created;
         } catch (error) {
           if (!existsAlready(error)) throw error;
@@ -349,12 +351,14 @@ export class CapabilityPathCoordinator {
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o666);
     } catch (error) { throw denied("safe new-file open failed: " + String(error)); }
     try {
+      const createdPath: CreatedPath = { path: candidate };
+      state.createdFiles.push(createdPath);
       const opened = await handle.stat();
-      state.createdFiles.push({ path: candidate, identity: identity(opened) });
+      createdPath.identity = identity(opened);
       const target: ExistingTarget = { canonical: await this.fs.realpath(candidate), identity: identity(opened), nlink: opened.nlink };
       await this.verifyOpen(handle, candidate, root, roots, target, true, "write");
       this.assertActive("write");
-      await handle.writeFile(content, { encoding: "utf8" });
+      await writeContents(handle, content);
     } finally { await handle.close(); }
   }
 
@@ -409,14 +413,14 @@ export class CapabilityPathCoordinator {
     for (const created of state.createdFiles.reverse()) {
       try {
         const stat = await this.fs.lstat(created.path);
-        if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && sameIdentity(identity(stat), created.identity))
-          await this.fs.unlink(created.path);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1
+            && (!created.identity || sameIdentity(identity(stat), created.identity))) await this.fs.unlink(created.path);
       } catch (error) { if (!missing(error)) failure ??= error; }
     }
     for (const created of state.createdDirectories.reverse()) {
       try {
         const stat = await this.fs.lstat(created.path);
-        if (stat.isDirectory() && !stat.isSymbolicLink() && sameIdentity(identity(stat), created.identity))
+        if (stat.isDirectory() && !stat.isSymbolicLink() && (!created.identity || sameIdentity(identity(stat), created.identity)))
           await this.fs.rmdir(created.path);
       } catch (error) { if (!missing(error)) failure ??= error; }
     }

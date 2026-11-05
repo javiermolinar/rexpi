@@ -4,7 +4,7 @@ import { createConnection, createServer, type Server as SocketServer, type Socke
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { identity as parseIdentity, isLive, record, sameIdentity, uuid, type Identity } from "./state.ts";
+import { identity as parseIdentity, isLive, piSessionId as validPiSessionId, record, sameIdentity, uuid, type Identity } from "./state.ts";
 import type { Runtime, Snapshot } from "./runtime.ts";
 import { assertSameAgentRun, parseAgentHandle, type AgentHandle } from "./agent.ts";
 import { assertLiveEndpoint, contextText, endpoint, endpointFromBinding, makeEnvelope, sameEndpoint,
@@ -240,7 +240,9 @@ function queryDigest(query: HistoryQuery): string {
   return createHash("sha256").update(JSON.stringify(query)).digest("hex");
 }
 function encodeCursor(sessionId: string, leafId: string | null, anchor: string, query: HistoryQuery): string {
-  return Buffer.from(JSON.stringify({ version: 2, sessionId, leafId, anchor, query: queryDigest(query) })).toString("base64url");
+  const encoded = Buffer.from(JSON.stringify({ version: 2, sessionId, leafId, anchor, query: queryDigest(query) })).toString("base64url");
+  if (encoded.length > 2048) throw new Error("Conversation continuation cursor exceeds 2,048 characters");
+  return encoded;
 }
 function decodeCursor(raw: string, sessionId: string, leafId: string | null, query: HistoryQuery): string {
   const v = record(JSON.parse(Buffer.from(raw, "base64url").toString("utf8")));
@@ -306,6 +308,55 @@ export function historyPage(entries: readonly unknown[], sessionId: string, leaf
     ...(query.since === undefined ? {} : { since: query.since }),
     ...(query.types.length ? { types: query.types } : {}),
     entries: selected.map(entry => entry.value), bytes, ...(next ? { next } : {}) };
+}
+export function validatePeerReadResult(value: unknown, input: PeerReadInput, target: string): PeerReadResult {
+  const checked = readInput(input), result = record(value), hasNext = Object.hasOwn(result, "next");
+  keys(result, ["target", "sessionId", "leafId", "view", "direction", "entries", "bytes", "textOnly", "activity",
+    ...(hasNext ? ["next"] : []), ...(Object.hasOwn(result, "since") ? ["since"] : []),
+    ...(Object.hasOwn(result, "types") ? ["types"] : [])]);
+  const targetRecord = record(result.target);
+  keys(targetRecord, ["taskId", "conversationId", "piSessionId", "role",
+    ...(Object.hasOwn(targetRecord, "version") ? ["version"] : []),
+    ...(Object.hasOwn(targetRecord, "origin") ? ["origin"] : [])]);
+  if (targetRecord.version !== undefined && targetRecord.version !== 1) throw new Error("Invalid conversation target version");
+  if (targetRecord.origin !== undefined) parseIdentity(record(targetRecord.origin));
+  const targetIdentity = parseIdentity(targetRecord), expectedTypes = [...(checked.types ?? [])].sort();
+  if (targetIdentity.conversationId !== target || !validPiSessionId(result.sessionId)
+      || (result.leafId !== null && (typeof result.leafId !== "string" || !result.leafId.length || result.leafId.length > 2048))
+      || result.view !== checked.view || result.direction !== checked.direction || result.textOnly !== (checked.textOnly ?? false)
+      || result.since !== checked.since || JSON.stringify(result.types ?? []) !== JSON.stringify(expectedTypes)
+      || !Array.isArray(result.entries) || result.entries.length > (checked.limit ?? 20) || result.entries.length > 100
+      || !Number.isSafeInteger(result.bytes) || Number(result.bytes) < 0 || Number(result.bytes) > MAX_HISTORY_PAGE_BYTES)
+    throw new Error("Mismatched conversation read response");
+  const activity = record(result.activity); keys(activity, ["idle", "pendingMessages"]);
+  if (typeof activity.idle !== "boolean" || typeof activity.pendingMessages !== "boolean")
+    throw new Error("Mismatched conversation read activity");
+  const ids = new Set<string>();
+  let bytes = 0;
+  for (const raw of result.entries) {
+    const entry = record(raw);
+    if (typeof entry.id !== "string" || !entry.id.length || entry.id.length > 2048 || ids.has(entry.id)
+        || typeof entry.type !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(entry.type))
+      throw new Error("Invalid conversation read entry");
+    ids.add(entry.id);
+    if (checked.textOnly) {
+      keys(entry, ["id", "type", "text"]);
+      if (typeof entry.text !== "string") throw new Error("Invalid conversation text entry");
+    }
+    const size = Buffer.byteLength(JSON.stringify(raw));
+    if (size > MAX_HISTORY_ENTRY_BYTES) throw new Error("Conversation read entry exceeds 48 KiB");
+    bytes += size;
+    if (bytes > MAX_HISTORY_PAGE_BYTES) throw new Error("Conversation read page exceeds 48 KiB");
+  }
+  if (bytes !== result.bytes) throw new Error("Mismatched conversation read byte count");
+  if (hasNext) {
+    if (typeof result.next !== "string" || !result.next.length || result.next.length > 2048 || !result.entries.length)
+      throw new Error("Invalid conversation continuation cursor");
+    const anchor = decodeCursor(result.next, result.sessionId, result.leafId, historyQuery(checked));
+    const expected = checked.direction === "tail" ? record(result.entries[0]).id : record(result.entries.at(-1)).id;
+    if (anchor !== expected) throw new Error("Mismatched conversation continuation anchor");
+  }
+  return result as unknown as PeerReadResult;
 }
 function privateDirectory(path: string): void {
   const stat = lstatSync(path);
@@ -649,16 +700,8 @@ export class PeerRuntime {
     }
   }
   async read(target: string, input: PeerReadInput, signal?: AbortSignal): Promise<PeerReadResult> {
-    const result = await this.request(target, "read", readInput(input), randomUUID(), signal) as PeerReadResult;
-    const expectedTypes = [...(input.types ?? [])].sort();
-    if (!Array.isArray(result.entries) || result.target.conversationId !== target || result.view !== (input.view ?? "branch")
-        || result.direction !== (input.direction ?? "head") || result.textOnly !== (input.textOnly ?? false)
-        || result.since !== input.since || JSON.stringify(result.types ?? []) !== JSON.stringify(expectedTypes)
-        || result.bytes > MAX_HISTORY_PAGE_BYTES || result.entries.length > 100
-        || (input.textOnly && result.entries.some(raw => {
-          const entry = record(raw); return typeof entry.id !== "string" || typeof entry.type !== "string" || typeof entry.text !== "string";
-        }))) throw new Error("Mismatched conversation read response");
-    return result;
+    const result = await this.request(target, "read", readInput(input), randomUUID(), signal);
+    return validatePeerReadResult(result, input, target);
   }
   async agentActivity(target: string, signal?: AbortSignal): Promise<PeerAgentActivityResult> {
     const result = await this.request(target, "agentActivity", {}, randomUUID(), signal) as PeerAgentActivityResult;

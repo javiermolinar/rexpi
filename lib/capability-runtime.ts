@@ -1,4 +1,5 @@
-import { parseCapabilityGrant, type CapabilityGrant, type LaunchOptions } from "./launch.ts";
+import { resolve } from "node:path";
+import { inheritCapabilityDeadline, parseCapabilityGrant, type CapabilityGrant, type LaunchOptions } from "./launch.ts";
 
 export interface CapabilityContext {
   abort(): void;
@@ -15,7 +16,7 @@ export interface CapabilityClock {
 }
 
 const systemClock: CapabilityClock = {
-  now: () => performance.now(),
+  now: () => Date.now(),
   setTimeout: (callback, timeoutMs) => setTimeout(callback, timeoutMs),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
 };
@@ -31,12 +32,17 @@ const subset = (child: readonly string[], parent: readonly string[]): boolean =>
   return child.every(value => allowed.has(value));
 };
 
-/** Exact-array attenuation only. Paths remain literal and are not authorized here. */
-export function attenuateCapabilityGrant(parent: CapabilityGrant, value: unknown, remainingTimeoutMs: number): CapabilityGrant {
+/** Resolve delegated paths against the parent cwd so a child launch directory cannot re-root them. */
+export function attenuateCapabilityGrant(parent: CapabilityGrant, value: unknown, remainingTimeoutMs: number,
+    cwd = process.cwd()): CapabilityGrant {
   if (value === undefined) throw new Error("Capability delegation denied: an explicit child grant is required");
-  const child = parseCapabilityGrant(value);
-  if (!subset(child.tools, parent.tools) || !subset(child.readPaths, parent.readPaths)
-      || !subset(child.writePaths, parent.writePaths))
+  const requested = parseCapabilityGrant(value);
+  const child = { ...requested, readPaths: requested.readPaths.map(path => resolve(cwd, path)),
+    writePaths: requested.writePaths.map(path => resolve(cwd, path)) };
+  const parentPaths = { readPaths: parent.readPaths.map(path => resolve(cwd, path)),
+    writePaths: parent.writePaths.map(path => resolve(cwd, path)) };
+  if (!subset(child.tools, parent.tools) || !subset(child.readPaths, parentPaths.readPaths)
+      || !subset(child.writePaths, parentPaths.writePaths))
     throw new Error("Capability delegation denied: child tools/readPaths/writePaths must be parent subsets");
   if (child.delegation.maxDepth > parent.delegation.maxDepth - 1)
     throw new Error("Capability delegation denied: child maxDepth exceeds the attenuated parent depth");
@@ -56,7 +62,8 @@ export function attenuateCapabilityGrant(parent: CapabilityGrant, value: unknown
 export class CapabilityRuntime {
   private readonly grant: CapabilityGrant;
   private readonly clock: CapabilityClock;
-  private readonly startedAt: number;
+  private readonly cwd: string;
+  private readonly deadlineAt: number;
   private readonly controller = new AbortController();
   private readonly onNotice?: (message: string) => void;
   private timer: CapabilityTimer | undefined;
@@ -68,15 +75,20 @@ export class CapabilityRuntime {
   private timeoutNotice = false;
   private retainedNotice: string | undefined;
 
-  constructor(grant: CapabilityGrant, options: { clock?: CapabilityClock; onNotice?: (message: string) => void } = {}) {
+  constructor(grant: CapabilityGrant, options: { clock?: CapabilityClock; cwd?: string; deadlineAt?: number;
+      onNotice?: (message: string) => void } = {}) {
     this.grant = parseCapabilityGrant(grant);
     this.clock = options.clock ?? systemClock;
+    this.cwd = options.cwd ?? process.cwd();
     this.onNotice = options.onNotice;
-    this.startedAt = this.clock.now();
+    const startedAt = this.clock.now();
+    this.deadlineAt = Math.min(startedAt + this.grant.timeoutMs, options.deadlineAt ?? Number.MAX_SAFE_INTEGER);
+    const remaining = this.deadlineAt - startedAt;
+    if (remaining <= 0) { this.expire(); return; }
     const timer = this.clock.setTimeout(() => {
       this.timer = undefined;
       this.expire();
-    }, this.grant.timeoutMs);
+    }, remaining);
     this.timer = timer;
     timer.unref?.();
   }
@@ -86,9 +98,10 @@ export class CapabilityRuntime {
 
   allowsTool(name: string): boolean { return this.grant.tools.includes(name); }
 
-  /** Literal child-grant paths only; resolution and filesystem authority stay in capability-paths. */
+  /** Child-cwd-independent roots; launch encoding still preserves the original literal grant. */
   pathGrants(): { readPaths: string[]; writePaths: string[] } {
-    return { readPaths: [...this.grant.readPaths], writePaths: [...this.grant.writePaths] }; }
+    return { readPaths: this.grant.readPaths.map(path => resolve(this.cwd, path)),
+      writePaths: this.grant.writePaths.map(path => resolve(this.cwd, path)) }; }
 
   attachContext(context: CapabilityContext): void { this.context = context; }
 
@@ -130,22 +143,26 @@ export class CapabilityRuntime {
     this.abortCurrent();
   }
 
+  private ensureActive(): boolean {
+    if (this.state !== "active") return false;
+    if (this.clock.now() < this.deadlineAt) return true;
+    this.expire();
+    return false;
+  }
+
   private remainingTimeoutMs(): number {
-    if (this.state !== "active") return 0;
-    const remaining = this.grant.timeoutMs - Math.max(0, this.clock.now() - this.startedAt);
-    if (remaining <= 0) {
-      this.expire();
-      return 0;
-    }
-    return remaining;
+    if (!this.ensureActive()) return 0;
+    return this.deadlineAt - this.clock.now();
   }
 
   deriveChildGrant(value: unknown): CapabilityGrant {
-    if (this.state !== "active") throw new Error(this.inactiveDenial().reason);
+    if (!this.ensureActive()) throw new Error(this.inactiveDenial().reason);
     if (this.grant.delegation.maxDepth <= 0)
       throw new Error("Capability delegation denied: delegation.maxDepth must be greater than zero");
     if (this.turnLimitDenied) throw new Error("Capability grant turn limit exhausted; delegation is denied");
-    return attenuateCapabilityGrant(this.grant, value, this.remainingTimeoutMs());
+    const child = attenuateCapabilityGrant(this.grant, value, this.remainingTimeoutMs(), this.cwd);
+    inheritCapabilityDeadline(child, this.deadlineAt);
+    return child;
   }
 
   deriveChildOptions(options: LaunchOptions): LaunchOptions {
@@ -160,10 +177,7 @@ export class CapabilityRuntime {
   /** Called at Pi's actual turn_start boundary, not at agent_start or message construction. */
   startTurn(context: CapabilityContext): boolean {
     this.attachContext(context);
-    if (this.state !== "active") {
-      this.abortCurrent();
-      return false;
-    }
+    if (!this.ensureActive()) return false;
     if (this.turnsStarted >= this.grant.turns) {
       this.turnLimitDenied = true;
       this.abortCurrent();
@@ -180,7 +194,7 @@ export class CapabilityRuntime {
   /** Global gate: applies to Rex, built-in, custom, and nested tool_call events alike. */
   guardTool(toolName: string, input: unknown, context?: CapabilityContext): ToolGateResult | undefined {
     if (context) this.attachContext(context);
-    if (this.state !== "active") return this.inactiveDenial();
+    if (!this.ensureActive()) return this.inactiveDenial();
     if (this.turnLimitDenied) return blocked("Capability grant turn limit exhausted; tool execution is denied");
     if (!this.allowsTool(toolName)) return blocked("Capability grant denied: tool is not whitelisted");
     if (toolName === "rex_jump" || toolName === "rex_open_session")
