@@ -73,6 +73,8 @@ test("related launches register identical created handles and record binding onl
   assert.deepEqual(child.register(propagated), result.handle);
   child.observe(propagated, { type: "binding.verified" });
   assert.deepEqual(child.register(propagated), parent.register(result.handle));
+  assert.throws(() => parent.pinEndpoint(result.handle, "0".repeat(64)), /Stale|conflicting/,
+    "verified startup pins the expected incarnation before any remote read");
   assert.throws(() => decodeAgentBootstrap("not+canonical"), /Invalid agent handle bootstrap/);
 });
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pin the verified startup endpoint incarnation and reject first-contact same-bootstrap replacements before accepting status/results or issuing cancellation/stop effects; correct legacy protocol-safe request-ID documentation.
 - Add the standalone supervised-agent lifecycle: related launches return and propagate exact token-free handles; status/events, explicit completion/results, cancellation, and sequential `rex_agent_stop` preserve independent evidence axes.
 - Add explicitly authorized (`authorize:true`) cooperating-endpoint stop using only Pi graceful shutdown, with accepted/closed/disconnected/unknown outcomes, exact generation/runtime fences, and parent/child deduplication. Stop never aborts, kills, restarts, cleans up, retries, or retracts surviving work.
 - Document handle creation versus binding/readiness, bounded retained evidence, pending/unknown results, cancellation acknowledgement versus quiescence, and stop acceptance versus exit.

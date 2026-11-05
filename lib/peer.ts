@@ -29,7 +29,7 @@ export interface PeerSendInput {
 interface PeerRequest {
   type: typeof PROTOCOL; version: 1; id: string;
   op: "read" | "send" | "agentActivity" | "agentResult" | "agentCancel" | "agentStop";
-  from: Endpoint; to: Endpoint; params: PeerReadInput | PeerSendInput | AgentHandle | Record<string, never>;
+  from: Endpoint; to: Endpoint; params: PeerReadInput | PeerSendInput | AgentHandle | PeerAgentControlInput | Record<string, never>;
 }
 export interface PeerAgentActivityResult {
   target: Identity;
@@ -42,6 +42,10 @@ export interface PeerAgentResultResult {
   endpointId: string;
   handle: AgentHandle;
   completion?: unknown;
+}
+interface PeerAgentControlInput {
+  handle: AgentHandle;
+  endpointId: string;
 }
 /** Local retained-completion provider; it cannot select routes or mutate delivery/activity. */
 export interface PeerAgentResultProvider {
@@ -176,8 +180,13 @@ function agentActivityInput(value: unknown): Record<string, never> {
   return {};
 }
 function agentResultInput(value: unknown): AgentHandle { return parseAgentHandle(value); }
-function agentCancelInput(value: unknown): AgentHandle { return parseAgentHandle(value); }
-function agentStopInput(value: unknown): AgentHandle { return parseAgentHandle(value); }
+function agentControlInput(value: unknown): PeerAgentControlInput {
+  const input = record(value);
+  keys(input, ["handle", "endpointId"]);
+  if (typeof input.endpointId !== "string" || !/^[0-9a-f]{64}$/.test(input.endpointId))
+    throw new Error("Invalid expected agent endpoint incarnation");
+  return { handle: parseAgentHandle(input.handle), endpointId: input.endpointId };
+}
 export function decodePeerRequest(body: string): PeerRequest {
   if (Buffer.byteLength(body) > MAX_PEER_REQUEST_BYTES) throw new Error("Peer request exceeds 40 KiB");
   const v = record(JSON.parse(body));
@@ -190,8 +199,8 @@ export function decodePeerRequest(body: string): PeerRequest {
       || from.conversationId === to.conversationId || from.blockId === to.blockId) throw new Error("Unrelated or invalid peer route");
   return { type: PROTOCOL, version: 1, id: v.id, op: v.op as PeerRequest["op"], from, to,
     params: v.op === "read" ? readInput(v.params) : v.op === "send" ? sendInput(v.params)
-      : v.op === "agentResult" ? agentResultInput(v.params) : v.op === "agentCancel" ? agentCancelInput(v.params)
-        : v.op === "agentStop" ? agentStopInput(v.params) : agentActivityInput(v.params) };
+      : v.op === "agentResult" ? agentResultInput(v.params)
+        : v.op === "agentActivity" ? agentActivityInput(v.params) : agentControlInput(v.params) };
 }
 function decodePeerResponse(body: string, id: string): PeerResult {
   if (Buffer.byteLength(body) > MAX_PEER_RESPONSE_BYTES) throw new Error("Peer response exceeds 96 KiB");
@@ -251,6 +260,11 @@ function privateDirectory(path: string): void {
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, 1024);
 }
+export function agentEndpointId(endpoint: Endpoint): string {
+  return createHash("sha256").update([endpoint.serverInstance, endpoint.conversationId, endpoint.blockId,
+    String(endpoint.pid), endpoint.token].join(":")).digest("hex");
+}
+
 export class PeerSendUnknownError extends Error {}
 export function isPeerSendUnknownError(error: unknown): error is PeerSendUnknownError {
   return error instanceof PeerSendUnknownError;
@@ -389,9 +403,7 @@ export class PeerRuntime {
     await this.verifySource(request.from, signal); signal.throwIfAborted(); this.guard();
     if (request.op === "agentActivity") {
       const owner = this.owner!;
-      return { target: this.own!.state,
-        endpointId: createHash("sha256").update([owner.serverInstance, owner.conversationId, owner.blockId,
-          String(owner.pid), owner.token].join(":")).digest("hex"),
+      return { target: this.own!.state, endpointId: agentEndpointId(owner),
         activity: { idle: this.ctx!.isIdle(), pendingMessages: this.ctx!.hasPendingMessages(), settled: this.settled } };
     }
     if (request.op === "agentResult") {
@@ -402,14 +414,14 @@ export class PeerRuntime {
       const completion = this.resultProvider.completion(handle);
       this.guard();
       return { target: this.own!.state, handle,
-        endpointId: createHash("sha256").update([owner.serverInstance, owner.conversationId, owner.blockId,
-          String(owner.pid), owner.token].join(":")).digest("hex"),
+        endpointId: agentEndpointId(owner),
         ...(completion === undefined ? {} : { completion }) };
     }
     if (request.op === "agentCancel") {
-      const owner = this.owner!, handle = request.params as AgentHandle, provider = this.cancelProvider;
+      const owner = this.owner!, input = request.params as PeerAgentControlInput, handle = input.handle, provider = this.cancelProvider;
       if (handle.taskId !== this.own!.state.taskId || handle.conversationId !== this.own!.state.conversationId)
         throw new Error("Agent cancel provider serves only its own verified conversation");
+      if (input.endpointId !== agentEndpointId(owner)) throw new Error("Stale expected agent endpoint incarnation");
       if (!provider) throw new Error("Agent cancel provider is unavailable");
       // The exact-run provider synchronously fences completion and deduplicates before yielding abort authority.
       this.guard(); signal.throwIfAborted();
@@ -425,13 +437,13 @@ export class PeerRuntime {
         }
       });
       return { target: this.own!.state, handle, ...outcome,
-        endpointId: createHash("sha256").update([owner.serverInstance, owner.conversationId, owner.blockId,
-          String(owner.pid), owner.token].join(":")).digest("hex") };
+        endpointId: agentEndpointId(owner) };
     }
     if (request.op === "agentStop") {
-      const owner = this.owner!, handle = request.params as AgentHandle, provider = this.stopProvider;
+      const owner = this.owner!, input = request.params as PeerAgentControlInput, handle = input.handle, provider = this.stopProvider;
       if (handle.taskId !== this.own!.state.taskId || handle.conversationId !== this.own!.state.conversationId)
         throw new Error("Agent stop provider serves only its own verified conversation");
+      if (input.endpointId !== agentEndpointId(owner)) throw new Error("Stale expected agent endpoint incarnation");
       if (!provider) throw new Error("Agent stop provider is unavailable");
       // Exact endpoint/run validation and synchronous deduplication precede the sole native shutdown effect.
       this.guard(); signal.throwIfAborted();
@@ -446,8 +458,7 @@ export class PeerRuntime {
         }
       });
       return { target: this.own!.state, handle, ...outcome,
-        endpointId: createHash("sha256").update([owner.serverInstance, owner.conversationId, owner.blockId,
-          String(owner.pid), owner.token].join(":")).digest("hex") };
+        endpointId: agentEndpointId(owner) };
     }
     if (request.op === "read") {
       const input = request.params as PeerReadInput, ctx = this.ctx!;
@@ -520,7 +531,7 @@ export class PeerRuntime {
   }
   private async request(targetId: string,
       op: "read" | "send" | "agentActivity" | "agentResult" | "agentCancel" | "agentStop",
-      params: PeerReadInput | PeerSendInput | AgentHandle | Record<string, never>, id: string,
+      params: PeerReadInput | PeerSendInput | AgentHandle | PeerAgentControlInput | Record<string, never>, id: string,
       external?: AbortSignal): Promise<PeerResult> {
     this.guard();
     const own = this.own!, from = this.owner!, to = this.target(targetId), generation = this.generation;
@@ -611,10 +622,12 @@ export class PeerRuntime {
       throw new PeerAgentResultEvidenceError(errorMessage(error));
     }
   }
-  async agentCancel(value: unknown, signal?: AbortSignal): Promise<PeerAgentCancelResult> {
-    const handle = agentCancelInput(value), target = handle.conversationId;
+  async agentCancel(value: unknown, signal?: AbortSignal, expectedEndpointId?: string): Promise<PeerAgentCancelResult> {
+    const handle = agentResultInput(value), target = handle.conversationId;
+    const endpointId = expectedEndpointId ?? (await this.agentActivity(target, signal)).endpointId;
+    const params = agentControlInput({ handle, endpointId });
     let result: PeerResult;
-    try { result = await this.request(target, "agentCancel", handle, randomUUID(), signal); }
+    try { result = await this.request(target, "agentCancel", params, randomUUID(), signal); }
     catch (error) {
       // Disconnects are conservative unknowns even when the transport failed before its write.
       // Exact local handle/authority rejection happens before this remote request in AgentRuntime.
@@ -642,11 +655,13 @@ export class PeerRuntime {
       throw unknownCancel(error);
     }
   }
-  async agentStop(value: unknown, signal?: AbortSignal): Promise<PeerAgentStopResult> {
-    const handle = agentStopInput(value), target = handle.conversationId;
+  async agentStop(value: unknown, signal?: AbortSignal, expectedEndpointId?: string): Promise<PeerAgentStopResult> {
+    const handle = agentResultInput(value), target = handle.conversationId;
+    const endpointId = expectedEndpointId ?? (await this.agentActivity(target, signal)).endpointId;
+    const params = agentControlInput({ handle, endpointId });
     // Unlike cancellation, a definite pre-write/unavailable failure remains disconnected. PeerRuntime
     // reserves PeerAgentStopUnknownError for failures after the request write or during response correlation.
-    const result = await this.request(target, "agentStop", handle, randomUUID(), signal);
+    const result = await this.request(target, "agentStop", params, randomUUID(), signal);
     try {
       const input = record(result), optionalError = Object.hasOwn(input, "error");
       keys(input, ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])]);

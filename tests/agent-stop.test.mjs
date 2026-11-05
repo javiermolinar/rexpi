@@ -28,7 +28,10 @@ function unitFixture() {
     state: "accepted", reason: "shutdown-requested" });
   const reader = {
     calls: 0, failure: undefined, reply: undefined, onStop: undefined,
-    async agentActivity() { throw new Error("Unexpected activity read"); },
+    async agentActivity() {
+      return { target, endpointId: "a".repeat(64),
+        activity: { idle: false, pendingMessages: false, settled: false } };
+    },
     async agentStop(received) {
       this.calls++; assert.deepEqual(received, handle);
       if (this.onStop) return this.onStop();
@@ -274,7 +277,7 @@ test("replacement and target-crash races return unknown without fabricating exit
   await t.test("target process changes after shutdown acceptance", async t => {
     const f = await peerPair(t), handle = f.register(); let checks = 0;
     f.w.onTerminalData = async (block, method) => {
-      if (block === f.child.blockId && method === "process" && ++checks === 2)
+      if (block === f.child.blockId && method === "process" && ++checks === 4)
         f.w.processPids.set(f.child.blockId, process.pid + 1);
     };
     const outcome = await f.stop(handle);

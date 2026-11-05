@@ -212,6 +212,8 @@ test("peer wire operation is parameter-free and does not alter conversation read
   const read = decodePeerRequest(JSON.stringify({ ...base, op: "read", params: { view: "branch", limit: 1 } }));
   assert.equal(read.op, "read"); assert.equal(read.params.limit, 1);
   const stopHandle = handle({ taskId: owner.taskId, conversationId: targetIdentity.conversationId });
-  const stopped = decodePeerRequest(JSON.stringify({ ...base, op: "agentStop", params: stopHandle }));
-  assert.equal(stopped.op, "agentStop"); assert.deepEqual(stopped.params, stopHandle);
+  const stopped = decodePeerRequest(JSON.stringify({ ...base, op: "agentStop",
+    params: { handle: stopHandle, endpointId: "a".repeat(64) } }));
+  assert.equal(stopped.op, "agentStop"); assert.deepEqual(stopped.params.handle, stopHandle);
+  assert.equal(stopped.params.endpointId, "a".repeat(64));
 });

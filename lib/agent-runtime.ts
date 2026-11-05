@@ -37,8 +37,8 @@ const TERMINAL_RESULTS = new Set(["ready", "failed", "cancelled"]);
 export interface AgentActivityReader {
   agentActivity(target: string, signal?: AbortSignal): Promise<PeerAgentActivityResult>;
   agentResult?(handle: AgentHandle, signal?: AbortSignal): Promise<PeerAgentResultResult>;
-  agentCancel?(handle: AgentHandle, signal?: AbortSignal): Promise<PeerAgentCancelResult>;
-  agentStop?(handle: AgentHandle, signal?: AbortSignal): Promise<PeerAgentStopResult>;
+  agentCancel?(handle: AgentHandle, signal?: AbortSignal, expectedEndpointId?: string): Promise<PeerAgentCancelResult>;
+  agentStop?(handle: AgentHandle, signal?: AbortSignal, expectedEndpointId?: string): Promise<PeerAgentStopResult>;
   setAgentResultProvider?(provider?: PeerAgentResultProvider): void;
   setAgentCancelProvider?(provider?: PeerAgentCancelProvider): void;
   setAgentStopProvider?(provider?: PeerAgentStopProvider): void;
@@ -600,6 +600,28 @@ export class AgentRuntime {
     return result;
   }
 
+  /** Pin the exact verified endpoint incarnation without adding lease material to AgentHandle. */
+  pinEndpoint(value: unknown, incarnation: unknown): AgentHandle {
+    const current = this.exact(value), expected = endpointId(incarnation);
+    if (current.endpointId && current.endpointId !== expected) {
+      if (!TERMINAL_BINDINGS.has(current.lifecycle.binding)) this.apply(current, { type: "binding.replaced" });
+      throw new Error("Stale or conflicting agent endpoint incarnation");
+    }
+    this.sameIncarnation(current, expected);
+    current.endpointId = expected;
+    return current.handle;
+  }
+
+  private acceptIncarnation(current: RunRecord, observed: string): boolean {
+    if (current.endpointId && current.endpointId !== observed) {
+      if (!TERMINAL_BINDINGS.has(current.lifecycle.binding)) this.apply(current, { type: "binding.replaced" });
+      return false;
+    }
+    this.sameIncarnation(current, observed);
+    current.endpointId = observed;
+    return true;
+  }
+
   private sameIncarnation(current: RunRecord, observed: string): void {
     for (const other of this.runs.values()) {
       if (other.handle.conversationId === current.handle.conversationId
@@ -629,12 +651,7 @@ export class AgentRuntime {
       return this.snapshot(current, "retained");
     if (!sameAgentConversation(current.handle, result.target)) throw new Error("Mismatched agent target evidence");
     const incarnation = endpointId(result.endpointId);
-    if (current.endpointId && current.endpointId !== incarnation) {
-      this.apply(current, { type: "binding.replaced" });
-      return this.snapshot(current, "retained");
-    }
-    this.sameIncarnation(current, incarnation);
-    current.endpointId = incarnation;
+    if (!this.acceptIncarnation(current, incarnation)) return this.snapshot(current, "retained");
     const activity = record(result.activity);
     if (typeof activity.idle !== "boolean" || typeof activity.pendingMessages !== "boolean"
         || typeof activity.settled !== "boolean" || Object.keys(activity).length !== 3)
@@ -700,10 +717,8 @@ export class AgentRuntime {
     if (!sameAgentConversation(current.handle, target)) throw new Error("Mismatched agent result target evidence");
     assertSameAgentRun(input.handle, current.handle);
     const incarnation = endpointId(input.endpointId);
-    if (current.endpointId && current.endpointId !== incarnation)
+    if (!this.acceptIncarnation(current, incarnation))
       return this.unknownResult(current, "Agent endpoint replacement makes the result unknown");
-    this.sameIncarnation(current, incarnation);
-    current.endpointId = incarnation;
 
     if (!Object.hasOwn(input, "completion")) {
       if (current.lifecycle.result === "cancelling")
@@ -770,14 +785,26 @@ export class AgentRuntime {
     finally { if (current.cancellationPromise === operation) current.cancellationPromise = undefined; }
   }
 
+  private async preflightControl(current: RunRecord, reader: AgentActivityReader, signal?: AbortSignal): Promise<boolean> {
+    const evidence = await reader.agentActivity(current.handle.conversationId, signal);
+    if (!sameAgentConversation(current.handle, evidence.target)) throw new Error("Mismatched agent control preflight target");
+    return this.acceptIncarnation(current, endpointId(evidence.endpointId));
+  }
+
   private async performCancellation(current: RunRecord, reader: AgentActivityReader | undefined,
       epoch: number, signal?: AbortSignal): Promise<AgentCancellation> {
     if (!reader?.agentCancel)
       return this.finishCancellation(current, "unknown", "transport", "Agent cancellation is disconnected or unavailable");
-    let response: PeerAgentCancelResult;
+    let response: PeerAgentCancelResult, preflight = false;
     try {
-      response = await reader.agentCancel(current.handle, signal);
+      preflight = true;
+      if (!await this.preflightControl(current, reader, signal))
+        return this.finishCancellation(current, "unknown", "changed", "Agent endpoint replacement makes cancellation unknown");
+      preflight = false;
+      response = await reader.agentCancel(current.handle, signal, current.endpointId);
     } catch (error) {
+      if (preflight)
+        return this.finishCancellation(current, "unknown", "transport", errorText(error));
       if (isPeerAgentCancelUnknownError(error))
         return this.finishCancellation(current, "unknown", "transport", errorText(error));
       // PeerRuntime reserves its unknown error for post-write ambiguity; this is a definite pre-write failure.
@@ -796,10 +823,7 @@ export class AgentRuntime {
       if (!sameAgentConversation(current.handle, target)) throw new Error("Mismatched agent cancel target evidence");
       assertSameAgentRun(input.handle, current.handle);
       const incarnation = endpointId(input.endpointId);
-      if (current.endpointId && current.endpointId !== incarnation)
-        throw new Error("Agent endpoint replacement makes cancellation unknown");
-      this.sameIncarnation(current, incarnation);
-      current.endpointId = incarnation;
+      if (!this.acceptIncarnation(current, incarnation)) throw new Error("Agent endpoint replacement makes cancellation unknown");
       const acknowledged = input.state === "acknowledged" && input.reason === "busy";
       const settled = input.state === "settled"
         && ["idle", "already-settled", "no-active-work"].includes(String(input.reason));
@@ -871,14 +895,20 @@ export class AgentRuntime {
       epoch: number, signal?: AbortSignal): Promise<AgentStop> {
     if (!reader?.agentStop)
       return this.finishStop(current, "disconnected", "unavailable", "Agent stop is disconnected or unavailable");
-    let response: PeerAgentStopResult;
+    let response: PeerAgentStopResult, preflight = false;
     try {
-      response = await reader.agentStop(current.handle, signal);
+      preflight = true;
+      if (!await this.preflightControl(current, reader, signal))
+        return this.finishStop(current, "unknown", "changed", "Agent endpoint replacement makes stop unknown");
+      preflight = false;
+      response = await reader.agentStop(current.handle, signal, current.endpointId);
     } catch (error) {
       const generation = this.generations.get(current.handle.conversationId) ?? current.handle.endpointGeneration;
       if (epoch !== this.epoch || this.reader !== reader || current.lifecycle.binding === "replaced"
           || current.handle.endpointGeneration < generation)
         return this.finishStop(current, "unknown", "changed", "Agent stop authority changed during the request");
+      if (preflight)
+        return this.finishStop(current, "disconnected", "pre-write", errorText(error));
       if (isPeerAgentStopUnknownError(error))
         return this.finishStop(current, "unknown", "transport", errorText(error));
       // The peer transport uses its unknown error only after a write; other failures are definite pre-write.
@@ -897,9 +927,7 @@ export class AgentRuntime {
       if (!sameAgentConversation(current.handle, target)) throw new Error("Mismatched agent stop target evidence");
       assertSameAgentRun(input.handle, current.handle);
       const incarnation = endpointId(input.endpointId);
-      if (current.endpointId && current.endpointId !== incarnation)
-        throw new Error("Agent endpoint replacement makes stop unknown");
-      this.sameIncarnation(current, incarnation);
+      if (!this.acceptIncarnation(current, incarnation)) throw new Error("Agent endpoint replacement makes stop unknown");
       this.assertStopAssociation(current);
       current.endpointId = incarnation;
       const accepted = input.state === "accepted" && input.reason === "shutdown-requested";

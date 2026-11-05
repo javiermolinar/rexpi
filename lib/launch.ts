@@ -10,6 +10,7 @@ import type { Created } from "./rex.ts";
 import { SessionClaim, SessionExistsError, sessionName } from "./session-name.ts";
 import type { MessagingRuntime, ReturnTicket } from "./messaging/runtime.ts";
 import { endpointFromBinding, type Endpoint } from "./messaging/protocol.ts";
+import { agentEndpointId } from "./peer.ts";
 import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
 import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
 import type { AgentRuntime } from "./agent-runtime.ts";
@@ -61,7 +62,7 @@ export interface LaunchConfig {
   startupTimeoutMs?: number;
   resolveProject?: DirectoryResolver;
   messaging?: Pick<MessagingRuntime, "prepareReturn" | "checkReturn" | "registerReturn" | "revokeReturn">;
-  agents?: Pick<AgentRuntime, "register" | "observe">;
+  agents?: Pick<AgentRuntime, "register" | "observe" | "pinEndpoint">;
 }
 function text(value: unknown, name: string, max: number): asserts value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > max || value.includes("\0"))
@@ -243,7 +244,10 @@ export class Launcher {
     const observed = await this.waitForStartup(own, result.identity, result.target, combined, ticket ? check : undefined);
     result.startup = observed.startup;
     if (handle && observed.child && this.config.agents) {
-      try { this.config.agents.observe(handle, { type: "binding.verified" }); }
+      try {
+        this.config.agents.pinEndpoint(handle, agentEndpointId(observed.child));
+        this.config.agents.observe(handle, { type: "binding.verified" });
+      }
       catch (error) {
         result.warning = (result.warning ? result.warning + " " : "")
           + "Agent binding evidence could not be recorded: " + (error instanceof Error ? error.message : String(error));

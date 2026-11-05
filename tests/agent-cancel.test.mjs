@@ -29,7 +29,10 @@ function unitFixture() {
   const reader = {
     calls: 0, resultCalls: 0, failure: undefined, reply: undefined, onCancel: undefined,
     completion: undefined, includeCompletion: false,
-    async agentActivity() { throw new Error("Unexpected activity read"); },
+    async agentActivity() {
+      return { target, endpointId: "a".repeat(64),
+        activity: { idle: false, pendingMessages: false, settled: false } };
+    },
     async agentResult(received) {
       this.resultCalls++; assert.deepEqual(received, handle);
       return { target, endpointId: "a".repeat(64), handle,
@@ -301,7 +304,7 @@ test("replacement and target-crash races never fabricate acknowledgement or canc
     const f = await peerPair(t), handle = f.register(); f.child.control.idle = false;
     let checks = 0;
     f.w.onTerminalData = async (block, method) => {
-      if (block === f.child.blockId && method === "process" && ++checks === 2)
+      if (block === f.child.blockId && method === "process" && ++checks === 4)
         f.w.processPids.set(f.child.blockId, process.pid + 1);
     };
     const outcome = await f.cancel(handle);
