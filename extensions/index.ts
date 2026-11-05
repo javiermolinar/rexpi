@@ -21,6 +21,8 @@ import { registerWorktreesCommand } from "./worktrees.ts";
 import { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { observeMessaging, registerMessageSend, registerMessagingControls, stopMessaging } from "./messaging.ts";
 import { registerConversationTools } from "./conversation.ts";
+import { PeerRuntime } from "../lib/peer.ts";
+import { registerPeerTools } from "./peer.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 
 const schema = Type.Object({
@@ -66,6 +68,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const agents = registerAgentsCommand(pi, () => runtime);
   let launcher: Launcher | undefined;
   let messaging: MessagingRuntime | undefined;
+  let peer: PeerRuntime | undefined;
   observeMessaging(pi, () => messaging);
   let terminal: TerminalOpener | undefined;
   let sessions: SessionOpener | undefined;
@@ -84,6 +87,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const stop = () => {
     activation++; agents.cancel(); worktrees.cancel();
     messaging?.detach(); messaging = undefined;
+    peer?.detach(); peer = undefined;
     runtime?.stop(); runtime = undefined;
     launcher = undefined; terminal = undefined; sessions = undefined;
   };
@@ -107,6 +111,9 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (generation !== activation) { active.stop(); return; }
       messaging = new MessagingRuntime(pi, active, agentDirectory, { transport: options.messagingTransport ?? "worker" });
       messaging.attach(ctx);
+      peer = new PeerRuntime(pi, active, stateDirectory);
+      await peer.attach(ctx);
+      if (generation !== activation) { peer.detach(); return; }
       const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
       launcher = new Launcher(active, { extension, agentDirectory, stateDirectory, messaging,
         resolveProject: (query, cwd, signal) => resolver.resolve(query, cwd, signal),
@@ -173,6 +180,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         registerMessageSend(pi, () => messaging);
         registerMessagingControls(pi, () => ({ runtime, messaging }));
         registerConversationTools(pi, () => ({ runtime, messaging }));
+        registerPeerTools(pi, () => ({ runtime, peer }));
         registerTerminalFeatures(pi, () => ({ runtime, terminal }), ctx);
         registerSessionTool(pi, () => ({ runtime, sessions }));
       }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add authenticated native reads of related live Pi branches and compacted context, plus attributed peer messages with explicit steering/follow-up delivery.
 - Use Rexpi consistently in user-facing messages and internal labels while retaining existing configuration, state, and messaging identifiers for compatibility.
 - Add project path and zoxide lookup to `rex_start_pi`, with session, tab, and split placement kept independent of directory lookup.
 - Reject combining `project` and `cwd`; explicit directories remain path-only.

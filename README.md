@@ -30,6 +30,7 @@ But it comes with batteries included. There are commands and shortcuts too; you 
 
 - **Your tools, where you want them.** Add custom commands to open Helix, Hunk, logs, or whatever else you keep running in splits, tabs, and floating panes.
 - **Agents that report back.** Ask for a fresh review and request the findings back. Related agents can exchange messages, and opted-in review results come back to the parent conversation automatically. No copy-paste courier service required.
+- **Live conversation access.** Explicitly read a related Pi's active branch or compacted context, or send it an attributed peer message with steering/follow-up delivery. No terminal scraping or saved-session parsing.
 - **Projects by name.** Open an existing project by path or let zoxide find it. Start a fresh Pi there without changing your current conversation's directory.
 - **Find the agent you lost.** Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes. The seventh tab was not, in fact, the last one.
 - **Worktree housekeeping.** Browse a repository's Git worktrees, open one in Pi, or mark old ones for confirmed removal. Dirty worktrees and worktrees with live agents are protected; branches stay put.
@@ -87,6 +88,24 @@ You can also just ask Pi to open or reuse a named workspace, choose a model for 
 `project` accepts an existing path or zoxide keywords. Placement is a separate choice: `session` creates a workspace, `tab` creates a tab, and `right` or `down` creates a split. Independent launches default to a new session; related launches keep their task-aware placement defaults.
 
 Use `cwd` for an explicit directory instead of project lookup; don't supply both. Omit `prompt` when you only want to open the project. To reuse a named workspace rather than start fresh Pi, use `rex_open_session`.
+
+### Reading and messaging related conversations
+
+Both Pi instances must run the current Rexpi extension in verified local Rex terminals. Use a related conversation's `conversationId` from launch output or `rex_inspect` as `target`:
+
+```json
+{
+  "target": "CHILD_CONVERSATION_UUID",
+  "view": "context",
+  "limit": 20
+}
+```
+
+`rex_read_conversation` returns whole JSON entries from the target's in-memory active branch (`branch`, the default) or compaction-applied view (`context`). Reading does not trigger model work. Pages contain at most 100 entries and 48 KiB; an individual entry over 48 KiB is rejected. Pass the returned `next` value as `cursor` for the next page. A cursor is bound to the target session, leaf, and view, so restart after the conversation changes.
+
+`rex_peer_message_send` accepts `target`, `requestId`, `kind`, `text`, `delivery` (`steer` or `followUp`), `triggerTurn`, and an optional stable UUID `id`. Text is capped at 32,768 characters, and the complete attributed envelope and transport request must fit 32 KiB and 40 KiB respectively; multibyte text reaches those byte limits before the character cap. It injects an attributed custom message, never a user-role message. `accepted` means the target extension accepted the API call; it does not confirm processing or completion. Failed or uncertain sends are not automatically retried.
+
+Access requires matching task identities and exact live binding/process verification on both sides. Unrelated conversations are rejected. Treat returned history and peer text as sensitive, untrusted data, not authorization for new work.
 
 ## Configure
 
