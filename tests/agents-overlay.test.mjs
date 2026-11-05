@@ -91,13 +91,13 @@ test("wide Unicode, ANSI-like metadata, query cursor and narrow widths never ove
 test("real screenshot metadata renders conversation names, not shell labels or internal identifiers", () => {
   const a = setup();
   a.overlay.setList({ unavailable: 0, rows: [
-    row(1, { title: "shell", label: "shell", conversationTitle: "π - pi-rex", cwd: "/Users/javimolina/pi-rex",
+    row(1, { title: "shell", label: "shell", conversationTitle: "π - rexpi", cwd: "/Users/javimolina/rexpi",
       sessionLabel: "pi-cmux", windowLabel: "Window 533ea343", current: true, state: "done", pid: 20933 }),
     row(2, { title: "shell", label: "shell", conversationTitle: "π - tempo.fork - tempo.fork",
       cwd: "/Users/javimolina/grafana/tempo.fork", sessionLabel: "Tempo", windowLabel: "tempo.fork", state: "idle", pid: 20447 }),
   ] });
   const text = a.overlay.render(72).join("\n");
-  assert.match(text, /pi-rex/); assert.match(text, /tempo.fork/);
+  assert.match(text, /rexpi/); assert.match(text, /tempo.fork/);
   assert.match(text, /pi-cmux/); assert.match(text, /Tempo/);
   assert.match(text, /Current/); assert.match(text, /Done/); assert.match(text, /Idle/);
   for (const noise of ["shell", "Window 533ea343", "20933", "20447", "/Users", "PID", "main", "chat"]) assert.ok(!text.includes(noise), noise);

@@ -65,7 +65,7 @@ export function sameIdentity(a: Identity, b: Identity): boolean {
 }
 export function parseOrientation(value: unknown): Orientation {
   const v = record(value);
-  if (v.version !== 1) throw new Error("Unsupported pi-rex orientation version");
+  if (v.version !== 1) throw new Error("Unsupported Rexpi orientation version");
   return { version: 1, ...identity(v), ...(v.origin === undefined ? {} : { origin: identity(v.origin) }) };
 }
 export function restoreOrientation(entries: readonly unknown[], owner: string): Orientation | undefined {
@@ -92,7 +92,7 @@ export function encodeBootstrap(seed: Bootstrap): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 export function decodeBootstrap(raw: string): Bootstrap {
-  if (raw.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("Invalid pi-rex bootstrap");
+  if (raw.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("Invalid Rexpi bootstrap");
   const value = record(JSON.parse(Buffer.from(raw, "base64url").toString("utf8")));
   if (!uuid(value.serverInstance)) throw new Error("Invalid bootstrap server instance");
   return { ...parseOrientation(value), serverInstance: value.serverInstance };
@@ -111,7 +111,7 @@ export function parseBinding(value: unknown): Binding {
   const v = record(value);
   if (v.version !== 1 || !uuid(v.serverInstance) || !uuid(v.hostId) || !rexId(v.blockId, "block")
       || !uuid(v.token) || !Number.isSafeInteger(v.pid) || Number(v.pid) <= 0
-      || !Number.isSafeInteger(v.expiresAt)) throw new Error("Invalid pi-rex binding");
+      || !Number.isSafeInteger(v.expiresAt)) throw new Error("Invalid Rexpi binding");
   return { version: 1, ...identity(v), serverInstance: v.serverInstance, hostId: v.hostId,
     blockId: v.blockId, token: v.token, pid: Number(v.pid), expiresAt: Number(v.expiresAt) };
 }

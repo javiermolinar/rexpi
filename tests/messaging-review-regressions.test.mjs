@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { chmodSync, linkSync, mkdirSync, readFileSync, renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import piRex from "../extensions/index.ts";
+import rexpi from "../extensions/index.ts";
 import { parentFixture } from "./messaging-integration-fixtures.mjs";
 import { binding, identity, rid, sandbox, world, uuid } from "./fixtures.mjs";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
@@ -32,7 +32,7 @@ async function extensionFixture(t) {
     registerTool: tool => tools.set(tool.name, tool), registerCommand: (name, command) => commands.set(name, command),
     registerShortcut() {}, getSettings: () => ({}), getCommands: () => [],
     appendEntry: (type, data) => sm.appendCustomEntry(type, data), sendMessage() { assert.fail("No model work"); } };
-  piRex(pi); await events.get("session_start")({}, ctx);
+  rexpi(pi); await events.get("session_start")({}, ctx);
   const params = { prompt: "scoped fixture task", returnResults: true, focus: false };
   return { root, w, events, tools, commands, notices, sm, ctx, params,
     call(id, input = params) { return tools.get("rex_start_pi").execute(id, input, undefined, undefined, ctx); },

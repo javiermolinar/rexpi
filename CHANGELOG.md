@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use Rexpi consistently in user-facing messages and internal labels while retaining existing configuration, state, and messaging identifiers for compatibility.
 - Add project path and zoxide lookup to `rex_start_pi`, with session, tab, and split placement kept independent of directory lookup.
 - Reject combining `project` and `cwd`; explicit directories remain path-only.
 - Remove `rex_jump` from the tool list. Use `rex_start_pi` for fresh conversations and `rex_open_session` to reuse named workspaces.

@@ -19,7 +19,7 @@ export class SessionClaim {
   constructor(directory: string, instanceId: string, name: string) {
     const info = lstatSync(directory);
     if (!info.isDirectory() || realpathSync(directory) !== directory || (info.mode & 0o077) !== 0 || info.uid !== process.getuid?.())
-      throw new Error("Session reservations require a private pi-rex state directory");
+      throw new Error("Session reservations require a private Rexpi state directory");
     const key = createHash("sha256").update(instanceId + "\0" + canonicalName(name)).digest("hex");
     this.path = join(directory, "session-" + key + ".claim.json");
     try {

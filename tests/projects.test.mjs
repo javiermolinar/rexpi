@@ -30,7 +30,7 @@ test("existing absolute, relative, spaced and home paths do not require zoxide",
 test("missing explicit paths and existing files cannot silently jump to unrelated zoxide matches", async t => {
   const root = sandbox(t); writeFileSync(join(root, "file"), "not a directory");
   const resolver = new ProjectResolver(async () => assert.fail("lookup must not execute"), "", "/missing/zoxide");
-  for (const query of [join(root, "missing"), "./missing", "../missing/path", "~/pi-rex-missing-" + uuid(), "file"])
+  for (const query of [join(root, "missing"), "./missing", "../missing/path", "~/rexpi-missing-" + uuid(), "file"])
     await assert.rejects(resolver.resolve(query, root));
 });
 test("fuzzy lookup uses literal bounded query arguments and validates its returned directory", async t => {

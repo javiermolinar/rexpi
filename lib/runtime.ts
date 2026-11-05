@@ -16,7 +16,7 @@ export interface Snapshot {
 /** Fail closed unless this Pi conversation is still the verified one backing `feature`.
     Identity metadata is not execution permission. */
 export function requireFeature<T>(runtime: Runtime | undefined, feature: T | undefined, sessionId?: string): T {
-  if (!runtime || feature === undefined) throw new Error("No verified pi-rex conversation");
+  if (!runtime || feature === undefined) throw new Error("No verified Rexpi conversation");
   if (sessionId !== undefined && runtime.snapshot().state.piSessionId !== sessionId)
     throw new Error("Pi source conversation changed");
   return feature;
@@ -52,7 +52,7 @@ export class Runtime {
     if (this.state) {
       try { this.store.remove(this.state.conversationId, this.token); } catch { /* lease expires if cleanup is unavailable */ }
     }
-    try { this.context?.ui.setStatus("pi-rex", undefined); } catch { /* context may be shutting down */ }
+    try { this.context?.ui.setStatus("rexpi", undefined); } catch { /* context may be shutting down */ }
     this.state = undefined; this.server = undefined; this.context = undefined; this.children = [];
   }
   async start(ctx: ExtensionContext, persist: (state: Orientation) => void, seed?: Bootstrap): Promise<void> {
@@ -77,7 +77,7 @@ export class Runtime {
     if (seed && restored && !sameIdentity(seed, restored)) throw new Error("Launch bootstrap conflicts with saved Pi identity");
     const state = seed ? parseOrientation(seed) : restored ?? rootOrientation(owner);
     const occupied = this.store.all().some(b => b.blockId === this.blockId && isLive(b, server));
-    if (occupied) throw new Error("Another live pi-rex runtime already claims this pane");
+    if (occupied) throw new Error("Another live Rexpi runtime already claims this pane");
     check();
     const binding = this.binding(state, server);
     this.store.write(binding);
@@ -88,7 +88,7 @@ export class Runtime {
       this.timer = setInterval(() => {
         try { this.renew(); } catch {
           this.stop();
-          ctx.ui.notify("pi-rex lost its conversation binding; reload before launching or navigating", "warning");
+          ctx.ui.notify("Rexpi lost its conversation binding; reload before launching or navigating", "warning");
         }
       }, RENEW_MS);
       this.timer.unref();
@@ -114,11 +114,11 @@ export class Runtime {
   }
   private updateStatus(): void {
     if (!this.state) return;
-    this.context?.ui.setStatus("pi-rex", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
+    this.context?.ui.setStatus("rexpi", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
       + (this.state.origin ? " · parent linked" : ""));
   }
   snapshot(): Snapshot {
-    if (!this.state || !this.server) throw new Error("No verified pi-rex conversation; use interactive Pi inside Rex");
+    if (!this.state || !this.server) throw new Error("No verified Rexpi conversation; use interactive Pi inside Rex");
     const snapshot = { state: this.state, server: this.server, blockId: this.blockId, token: this.token,
       generation: this.generation, signal: this.lifecycle.signal };
     this.assert(snapshot);

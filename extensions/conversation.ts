@@ -22,7 +22,7 @@ export function registerConversationTools(pi: ExtensionAPI, current: () => Conve
     },
   });
   pi.registerTool({
-    name: "rex_inspect", label: "Inspect pi-rex state",
+    name: "rex_inspect", label: "Inspect Rexpi state",
     description: "Read identity, parent, up to 64 remembered children and body-free messaging status. Local evidence, not a process-health probe.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({}, { additionalProperties: false }),

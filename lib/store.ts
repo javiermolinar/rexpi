@@ -19,12 +19,12 @@ export class BindingStore {
       }
       const ancestor = lstatSync(current);
       if (!ancestor.isDirectory() || ancestor.isSymbolicLink())
-        throw new Error("pi-rex state directory must contain no symlinks or non-directories");
+        throw new Error("Rexpi state directory must contain no symlinks or non-directories");
     }
     const info = lstatSync(this.directory);
     if (!info.isDirectory() || realpathSync(this.directory) !== this.directory
         || (info.mode & 0o077) !== 0 || info.uid !== process.getuid?.())
-      throw new Error("pi-rex state directory must be private, owned by you, and contain no symlinks");
+      throw new Error("Rexpi state directory must be private, owned by you, and contain no symlinks");
   }
   private path(conversationId: string, token: string): string {
     if (!uuid(conversationId) || !uuid(token)) throw new Error("Invalid binding file identity");
@@ -43,7 +43,7 @@ export class BindingStore {
   all(): Binding[] {
     this.ensure();
     const names = readdirSync(this.directory).filter(name => FILE.test(name));
-    if (names.length > 1024) throw new Error("Too many pi-rex binding files; inspect the state directory");
+    if (names.length > 1024) throw new Error("Too many Rexpi binding files; inspect the state directory");
     return names.flatMap(name => {
       const value = this.readFile(join(this.directory, name));
       return value && name === value.conversationId + "." + value.token + ".json" ? [value] : [];

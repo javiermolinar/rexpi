@@ -40,7 +40,7 @@ function setup(themeName) {
   const overlay = new AgentsOverlay({ style, keybindings: new KeybindingsManager(TUI_KEYBINDINGS), terminalRows: () => height,
     done() {}, refresh() {}, requestRender() {} });
   const rows = [
-    { key: "pi", app: "Pi", state: "done", title: "pi-rex", message: "", cwd: "/project", current: true,
+    { key: "pi", app: "Pi", state: "done", title: "rexpi", message: "", cwd: "/project", current: true,
       sessionId: "project", sessionLabel: "pi-cmux", windowId: "tab", windowLabel: "Window 533ea343", blockId: "pi-pane", pid: 1 },
     { key: "claude", app: "Claude", state: "unknown", title: "Claude Code", message: "No native status", cwd: "/project",
       sessionId: "project", sessionLabel: "pi-cmux", windowId: "tab", windowLabel: "Window 533ea343", blockId: "claude-pane", pid: 2 },

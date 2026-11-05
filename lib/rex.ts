@@ -64,7 +64,7 @@ export class Rex {
     if (principal.kind !== "peer" || principal.transport !== "unix" || principal.uid !== process.getuid?.()
         || typeof value.endpoint !== "string" || !value.endpoint.startsWith("unix://")
         || !uuid(value.instance_id) || !uuid(value.host_id))
-      throw new Error("pi-rex currently requires a same-user local Rex Unix socket");
+      throw new Error("Rexpi currently requires a same-user local Rex Unix socket");
     return { endpoint: value.endpoint, instanceId: value.instance_id, hostId: value.host_id };
   }
   async initialize(expectedBlock: string, signal?: AbortSignal): Promise<Server> {
@@ -78,7 +78,7 @@ export class Rex {
   async checkServer(signal?: AbortSignal): Promise<void> {
     const actual = this.localServer(await this.json(["whoami", "--json"], signal));
     if (!this.server || actual.instanceId !== this.server.instanceId || actual.hostId !== this.server.hostId)
-      throw new Error("Rex server instance changed; reload pi-rex before continuing");
+      throw new Error("Rex server instance changed; reload Rexpi before continuing");
   }
   async view(sessionId: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
     if (!rexId(sessionId, "session")) throw new Error("Invalid Rex session ID");

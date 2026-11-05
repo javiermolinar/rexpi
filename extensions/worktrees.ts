@@ -20,7 +20,7 @@ export function registerWorktreesCommand(pi: ExtensionAPI, current: () => { runt
     if (ctx.mode !== "tui") { ctx.ui.notify("/rxw requires interactive Pi in Rex", "warning"); return; }
     if (active) return;
     const { runtime, launcher } = current();
-    if (!runtime || !launcher) { ctx.ui.notify("No verified pi-rex conversation", "warning"); return; }
+    if (!runtime || !launcher) { ctx.ui.notify("No verified Rexpi conversation", "warning"); return; }
     const run = { controller: new AbortController(), close: undefined as (() => void) | undefined };
     active = run;
     const reads = new AbortController();

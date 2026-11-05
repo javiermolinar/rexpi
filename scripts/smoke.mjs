@@ -13,7 +13,7 @@ import { Rex } from "../lib/rex.ts";
 import { BindingStore } from "../lib/store.ts";
 import { rexId } from "../lib/state.ts";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-rex-smoke-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "rexpi-smoke-")));
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rexBinary = executable(process.env.PI_REX_CLI ?? "rex", process.cwd());
 const piBinary = executable(process.env.PI_REX_BINARY ?? "pi", process.cwd());
@@ -44,26 +44,26 @@ try {
     defaultProvider: "openai", defaultModel: "gpt-4.1",
     "pi-rex": { commands: {
       "smoke-float": { run: ["/bin/sh", "-c", "printf floating-tool-ok; exec /bin/sleep 60"],
-        placement: "floating", focus: false, title: "pi-rex floating smoke", bounds: [0.2, 0.2, 0.6, 0.6] },
+        placement: "floating", focus: false, title: "rexpi floating smoke", bounds: [0.2, 0.2, 0.6, 0.6] },
       "smoke-tab": { run: ["/bin/sh", "-c", "printf tab-tool-ok; exec /bin/sleep 60"],
-        placement: "tab", focus: false, title: "pi-rex tab smoke" },
+        placement: "tab", focus: false, title: "rexpi tab smoke" },
     } },
   }), { mode: 0o600 });
-  writeFileSync(join(agent, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: "pi-rex-no-prompt-smoke-not-a-real-key" } }), { mode: 0o600 });
+  writeFileSync(join(agent, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: "rexpi-no-prompt-smoke-not-a-real-key" } }), { mode: 0o600 });
   const wrapper = join(root, "pi-smoke.sh");
   writeFileSync(wrapper, "#!/bin/sh\nexport PI_OFFLINE=1\nexec " + quote(piBinary)
     + ' --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-themes "$@"\n', { mode: 0o700 });
   creationAttempted = true;
-  parentTarget = await rex.create({ placement: "session", source, cwd: repo, sessionName: "pi-rex smoke workspace", title: "pi-rex smoke", focus: false,
+  parentTarget = await rex.create({ placement: "session", source, cwd: repo, sessionName: "rexpi smoke workspace", title: "rexpi smoke", focus: false,
     command: ["/usr/bin/env", "PATH=" + process.env.PATH, "PI_CODING_AGENT_DIR=" + agent,
       "PI_REX_CLI=" + rexBinary, "PI_REX_SERVER=" + server.endpoint, "PI_REX_BINARY=" + wrapper, "PI_REX_STATE_DIR=" + store.directory,
       "PI_REX_RETURN_KEY=ctrl+alt+b", "PI_REX_AGENTS_KEY=off", "PI_REX_MESSAGES_STOP_KEY=ctrl+alt+m",
       wrapper, "--extension", join(repo, "extensions", "index.ts"), "--session-id", parentId] });
   createdSession = parentTarget.sessionId;
-  const matches = await rex.matchingSessions("PI-REX SMOKE WORKSPACE");
-  assert.deepEqual(matches, [{ sessionId: createdSession, name: "pi-rex smoke workspace" }]);
+  const matches = await rex.matchingSessions("REXPI SMOKE WORKSPACE");
+  assert.deepEqual(matches, [{ sessionId: createdSession, name: "rexpi smoke workspace" }]);
   const initial = await rex.view(createdSession);
-  assert.equal(initial.windows[0].label, "pi-rex smoke", "Session name and tab title must be independent");
+  assert.equal(initial.windows[0].label, "rexpi smoke", "Session name and tab title must be independent");
   const wait = async predicate => {
     const end = Date.now() + 20000;
     while (Date.now() < end) {
@@ -115,8 +115,8 @@ try {
   assert.notEqual(replaced.conversationId, child.conversationId);
   assert.equal(replaced.role, "main");
   for (const [command, title, token, kind] of [
-    ["/smoke-float", "pi-rex floating smoke", "floating-tool-ok", "floating"],
-    ["/smoke-tab", "pi-rex tab smoke", "tab-tool-ok", "tiled"],
+    ["/smoke-float", "rexpi floating smoke", "floating-tool-ok", "floating"],
+    ["/smoke-tab", "rexpi tab smoke", "tab-tool-ok", "tiled"],
   ]) {
     await sendCommand(parent.blockId, command);
     let helper;
@@ -160,7 +160,7 @@ try {
 } finally {
   if (createdSession) {
     const view = await rex.view(createdSession);
-    assert.equal(view.label, "pi-rex smoke workspace", "Refusing to clean up a session not identified as this smoke test");
+    assert.equal(view.label, "rexpi smoke workspace", "Refusing to clean up a session not identified as this smoke test");
     for (const value of store.all()) childPids.add(value.pid);
     await rex.api("session.destroy", { session_id: createdSession });
     const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };

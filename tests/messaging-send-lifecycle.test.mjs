@@ -5,7 +5,7 @@ import fs, { existsSync, readdirSync, readFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import piRex from "../extensions/index.ts";
+import rexpi from "../extensions/index.ts";
 import { registerMessageSend } from "../extensions/messaging.ts";
 import { BindingStore } from "../lib/store.ts";
 import { endpointFromBinding } from "../lib/messaging/protocol.ts";
@@ -28,7 +28,7 @@ async function fixture(t) {
     events.get("session_shutdown")?.({}, ctx);
     for (const [k, v] of Object.entries(prior)) v === undefined ? delete process.env[k] : process.env[k] = v;
   });
-  piRex({ on: (name, fn) => events.set(name, fn), exec: w.exec, registerTool: tool => tools.set(tool.name, tool),
+  rexpi({ on: (name, fn) => events.set(name, fn), exec: w.exec, registerTool: tool => tools.set(tool.name, tool),
     registerCommand: (name, command) => commands.set(name, command), registerShortcut() {},
     getSettings: () => ({}), getCommands: () => [], appendEntry: (type, data) => sm.appendCustomEntry(type, data),
     sendMessage() { assert.fail("Inspection cannot request follow-up work"); } }, { messagingTransport: "sync" });

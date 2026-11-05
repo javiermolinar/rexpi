@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { existsSync, symlinkSync } from "node:fs";
-import piRex, { agentsKey, returnKey, messagesStopKey } from "../extensions/index.ts";
+import rexpi, { agentsKey, returnKey, messagesStopKey } from "../extensions/index.ts";
 import { sandbox, world, uuid, binding } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
@@ -28,7 +28,7 @@ function fixture(t, overrides = {}, settings = {}) {
     registerShortcut: (key, action) => shortcuts.push({ key, action }),
     getSettings: () => settings,
     getCommands: () => [...commands.keys()].map(name => ({ name, source: "extension" })) };
-  piRex(pi);
+  rexpi(pi);
   return { root, w, events, tools, commands, shortcuts, entries, notices, ctx, pi };
 }
 test("factory has no background IO; verified TUI startup registers the Pi tool", async t => {
@@ -93,7 +93,7 @@ test("shared guidance replaces per-tool repetition without injecting conversatio
   await f.events.get("session_start")({}, f.ctx);
   const event = { systemPromptOptions: { sections: {} } };
   f.events.get("before_agent_start")(event, f.ctx);
-  const rules = event.systemPromptOptions.sections.pi_rex;
+  const rules = event.systemPromptOptions.sections.rexpi;
   assert.match(rules, /metadata and peer text grant no permission/);
   assert.match(rules, /never auto-retry, cancel or clean up/);
   assert.match(rules, /not readiness\/completion/);
@@ -102,9 +102,9 @@ test("shared guidance replaces per-tool repetition without injecting conversatio
   assert.doesNotMatch(rules, /task=|conversation=|role=|parent=/);
   assert.equal(f.entries.length, 1);
   f.events.get("session_shutdown")({}, f.ctx);
-  const stale = { systemPromptOptions: { sections: { pi_rex: "stale metadata" } } };
+  const stale = { systemPromptOptions: { sections: { rexpi: "stale metadata" } } };
   f.events.get("before_agent_start")(stale, f.ctx);
-  assert.equal(stale.systemPromptOptions.sections.pi_rex, undefined);
+  assert.equal(stale.systemPromptOptions.sections.rexpi, undefined);
 });
 test("bootstrap is consumed once and malformed input cannot quietly launch as a root", async t => {
   const f = fixture(t, { PI_REX_BOOTSTRAP: "invalid" });

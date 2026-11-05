@@ -13,7 +13,7 @@ export function registerAgentsCommand(pi: ExtensionAPI, getRuntime: () => Runtim
     if (ctx.mode !== "tui") { ctx.ui.notify("/rxa requires interactive Pi in Rex", "warning"); return; }
     if (active) return;
     const runtime = getRuntime();
-    if (!runtime) { ctx.ui.notify("No verified pi-rex conversation", "warning"); return; }
+    if (!runtime) { ctx.ui.notify("No verified Rexpi conversation", "warning"); return; }
     const run = { controller: new AbortController(), close: undefined as (() => void) | undefined };
     active = run;
     const reads = new AbortController();

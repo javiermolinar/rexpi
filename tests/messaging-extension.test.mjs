@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import piRex from "../extensions/index.ts";
+import rexpi from "../extensions/index.ts";
 import { observeMessaging, registerMessageSend } from "../extensions/messaging.ts";
 import { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { FileMailbox } from "../lib/messaging/file-transport.ts";
@@ -140,7 +140,7 @@ test("extension wires opt-in launch and literal instructions; shutdown preserves
   const pi = { on: (name, fn) => events.set(name, fn), exec: w.exec, registerTool: tool => tools.set(tool.name, tool),
     registerCommand() {}, registerShortcut() {}, getSettings: () => ({}), getCommands: () => [],
     appendEntry: (type, data) => sm.appendCustomEntry(type, data), sendMessage: (...args) => sent.push(args) };
-  piRex(pi); assert.equal(tools.size, 0); await events.get("session_start")({}, ctx);
+  rexpi(pi); assert.equal(tools.size, 0); await events.get("session_start")({}, ctx);
   const store = new BindingStore(join(root, "bindings"));
   w.onCreate = args => {
     const raw = args.find(s => s.startsWith(BOOTSTRAP_ENV + "="));
