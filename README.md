@@ -6,7 +6,11 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
 
-Tiny arms, many panes. A Pi extension for Rex to multiplex the world.
+**Pi tools for [Rex](https://www.superlogical.com/rex): parallel agents, terminal panes, project switching, and review handoffs.**
+
+From the author of [pi-cmux](https://github.com/javiermolinar/pi-cmux).
+
+Tiny arms, many panes.
 
 ![Rexpi](assets/rexpi.jpg)
 
