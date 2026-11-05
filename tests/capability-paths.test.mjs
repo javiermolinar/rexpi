@@ -203,7 +203,7 @@ test("existing hardlink writes and edits deny and leave both aliases unchanged",
   assert.equal(await fs.readFile(alias, "utf8"), "original");
 });
 
-test("a post-creation denial removes only coordinator-created files and parents", async t => {
+test("a post-creation denial preserves created paths and reports incomplete cleanup", async t => {
   const root = await sandbox(t), target = join(root, "new/deep/file");
   let fail = false;
   const injected = { ...pathFs, realpath: async path => {
@@ -215,9 +215,30 @@ test("a post-creation denial removes only coordinator-created files and parents"
     return handle;
   } };
   const { tools: map } = await tools(root, pathRuntime(root), injected);
-  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /post-create/);
-  assert.equal(existsSync(join(root, "new")), false);
-  assert.equal(await fs.readdir(root).then(entries => entries.length), 0);
+  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /cleanup was incomplete/);
+  assert.equal(await fs.readFile(target, "utf8"), "");
+  assert.equal(existsSync(join(root, "new/deep")), true);
+});
+
+test("known-identity creation failures never delete a later replacement", async t => {
+  const root = await sandbox(t), target = join(root, "file"), moved = join(root, "original");
+  let replace = false;
+  const injected = { ...pathFs, realpath: async path => {
+    if (path === target && replace) {
+      await fs.rename(target, moved);
+      await fs.writeFile(target, "post-check replacement");
+      throw new Error("forced post-open failure");
+    }
+    return fs.realpath(path);
+  }, open: async (path, flags, mode) => {
+    const handle = await fs.open(path, flags, mode);
+    if (path === target) replace = true;
+    return handle;
+  } };
+  const { tools: map } = await tools(root, pathRuntime(root), injected);
+  await assert.rejects(execute(map.get("write"), { path: "file", content: "new" }), /cleanup was incomplete/);
+  assert.equal(await fs.readFile(target, "utf8"), "post-check replacement");
+  assert.equal(existsSync(moved), true);
 });
 
 test("unknown new-file identity preserves replacements and reports incomplete cleanup", async t => {

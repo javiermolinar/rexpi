@@ -20,8 +20,6 @@ export interface CapabilityPathFs {
   stat(path: string): Promise<Stats>;
   open(path: string, flags: number, mode?: number): Promise<FileHandle>;
   mkdir(path: string, options: { mode: number }): Promise<void>;
-  unlink(path: string): Promise<void>;
-  rmdir(path: string): Promise<void>;
 }
 
 const nativeFs: CapabilityPathFs = {
@@ -30,8 +28,6 @@ const nativeFs: CapabilityPathFs = {
   stat: path => fs.stat(path),
   open: (path, flags, mode) => fs.open(path, flags, mode),
   mkdir: async (path, options) => { await fs.mkdir(path, options); },
-  unlink: path => fs.unlink(path),
-  rmdir: path => fs.rmdir(path),
 };
 
 interface Identity { dev: number; ino: number }
@@ -43,7 +39,7 @@ interface RootPin extends GrantRoot {
   directory: boolean;
 }
 interface ExistingTarget { canonical: string; identity: Identity; nlink: number }
-interface CreatedPath { path: string; identity?: Identity }
+interface CreatedPath { path: string }
 interface CallState {
   tool: "read" | "write" | "edit";
   createdFiles: CreatedPath[];
@@ -307,7 +303,6 @@ export class CapabilityPathCoordinator {
           const createdPath: CreatedPath = { path: current };
           state.createdDirectories.push(createdPath);
           const created = await this.fs.lstat(current);
-          createdPath.identity = identity(created);
           if (!created.isDirectory() || created.isSymbolicLink()) throw denied("created parent is not a real directory");
           stat = created;
         } catch (error) {
@@ -354,7 +349,6 @@ export class CapabilityPathCoordinator {
       const createdPath: CreatedPath = { path: candidate };
       state.createdFiles.push(createdPath);
       const opened = await handle.stat();
-      createdPath.identity = identity(opened);
       const target: ExistingTarget = { canonical: await this.fs.realpath(candidate), identity: identity(opened), nlink: opened.nlink };
       await this.verifyOpen(handle, candidate, root, roots, target, true, "write");
       this.assertActive("write");
@@ -409,30 +403,11 @@ export class CapabilityPathCoordinator {
   }
 
   private async cleanup(state: CallState): Promise<unknown> {
-    let failure: unknown;
-    for (const created of state.createdFiles.reverse()) {
-      if (!created.identity) {
-        failure ??= new Error("Created file identity is unknown; cleanup refused to unlink a possible replacement: " + created.path);
-        continue;
-      }
-      try {
-        const stat = await this.fs.lstat(created.path);
-        if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1
-            && sameIdentity(identity(stat), created.identity)) await this.fs.unlink(created.path);
-      } catch (error) { if (!missing(error)) failure ??= error; }
-    }
-    for (const created of state.createdDirectories.reverse()) {
-      if (!created.identity) {
-        failure ??= new Error("Created directory identity is unknown; cleanup refused to remove a possible replacement: " + created.path);
-        continue;
-      }
-      try {
-        const stat = await this.fs.lstat(created.path);
-        if (stat.isDirectory() && !stat.isSymbolicLink() && sameIdentity(identity(stat), created.identity))
-          await this.fs.rmdir(created.path);
-      } catch (error) { if (!missing(error)) failure ??= error; }
-    }
-    return failure;
+    const paths = [...state.createdFiles, ...state.createdDirectories].map(created => created.path);
+    if (!paths.length) return undefined;
+    // Node/POSIX has no atomic compare-identity-and-delete operation. Preserve every pathname
+    // rather than risking another writer's replacement between an identity check and deletion.
+    return new Error("Automatic cleanup is unavailable; created paths were preserved: " + paths.join(", "));
   }
 }
 
