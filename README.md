@@ -107,6 +107,49 @@ Both Pi instances must run the current Rexpi extension in verified local Rex ter
 
 Access requires matching task identities and exact live binding/process verification on both sides. Unrelated conversations are rejected. Treat returned history and peer text as sensitive, untrusted data, not authorization for new work.
 
+### Supervised agent lifecycle
+
+Every **related** `rex_start_pi` launch now returns a versioned, token-free `handle` in its `LaunchResult`. For native UUID launch IDs, its `requestId` equals the launch ID; other legacy launcher IDs receive deterministic `launch:<sha256>` correlation. The remaining fields correlate the task, child conversation, runtime, run, message, and endpoint generation. The launcher registers the identical handle in the parent, passes it in a separate strictly validated bootstrap value, and the child registers that same value after checking it against the decoded child identity. Independent launches return no handle. There is no handle-discovery, fan-out, delegation, capability-grant, or automatic-recovery API.
+
+Handle creation is only local correlation. It remains `created` after an unknown launch outcome and does not prove that a pane, Pi process, binding, or work exists. A `bound` startup means the exact child binding and process were observed; it is not task readiness or completion. The first endpoint generation is 1. Pi session replacement stales retained handles instead of retargeting them. Keep the complete handle: changing any identity field, using a foreign or self handle, or using a stale generation fails closed.
+
+The lifecycle tools are:
+
+| Tool | Purpose |
+|---|---|
+| `rex_agent_status` | Read binding, activity, delivery, and result observations for one exact handle. |
+| `rex_agent_events` | Page retained observations and stop/cancellation records; this does not probe the endpoint or trigger work. |
+| `rex_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome with exact request/run/runtime correlation. |
+| `rex_agent_result` | Read the related child's explicit completion, or report `pending`, `cancelling`, or `unknown`. |
+| `rex_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
+| `rex_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |
+
+**The status axes are independent.** `binding` describes created/bound/unknown/exited/replaced endpoint evidence. `activity` distinguishes non-idle (`running`), an instantaneous idle sample, and correlated agent-end settlement; none proves model processing or completion. `pendingInput` is only the last pending-message sample. `delivery` concerns a requested settlement notification: accepted delivery proves neither parent processing nor completion and is never retracted. `result` changes only on explicit result evidence or an explicit cancellation/unknown observation. Conversation history, activity, delivery, cancellation, stop, and result evidence do not imply one another.
+
+Results are not inferred from idle, settlement, exit, replacement, launch, or delivery. `pending` means the current target explicitly reported no completion; `unknown` means evidence is unavailable or ambiguous. `ready`, `failed`, and `cancelled` include only an explicit retained completion. `resultAvailable` reflects that local explicit completion, not remote liveness. Once retained, a terminal result survives later stop, disconnect, exit, or replacement evidence.
+
+Cancellation outcomes are also narrow. `requested` records no acknowledgement; `acknowledged` means only that Pi abort was requested for verified busy work, **not** that work is quiescent or has a cancelled result. `settled` means no abort was needed for idle, settled, exited, or explicitly terminal work. `unknown` covers abort-throw, post-write loss, and replacement races. Cancellation is deduplicated and never automatically retried; later explicit completed/failed/cancelled evidence remains admissible.
+
+`rex_agent_stop` is sequential and source-fenced, and requires the literal parameter:
+
+```json
+{
+  "handle": "THE_COMPLETE_RELATED_LAUNCH_HANDLE",
+  "authorize": true
+}
+```
+
+(The actual `handle` value is the object returned by launch, not a string.) Stop uses authenticated peer correlation and `ExtensionContext.shutdown()` as its only native shutdown effect. Busy, idle, and explicitly completed endpoints can all accept stop. Its outcomes are:
+
+- `accepted`: shutdown was requested; exit has **not** been established.
+- `closed`: positive exit evidence for that exact incarnation already existed before this request; no new shutdown was needed.
+- `disconnected`: transport was definitely unavailable or failed before a write, so no request outcome is claimed.
+- `unknown`: the response was lost after a possible write, shutdown threw, correlation/validation failed after a request, or replacement/source authority changed during the race. Inspect; never assume either exit or survival.
+
+Stale, foreign, self, miscorrelated, and ambiguous-runtime requests have no shutdown effect. Concurrent and repeated calls share retained outcomes, and the child independently deduplicates the provider so shutdown is invoked at most once for that handle, including after an unknown outcome. Stop never kills or aborts a process, calls `Runtime.stop`, detaches or cleans up resources, restarts, retries, marks surviving work cancelled, or withdraws accepted messages/results. Normal later Pi `session_shutdown` may close peer resources; retained in-memory bindings and outcome evidence remain subject to their normal lifecycle.
+
+Evidence is deliberately bounded and in memory: at most 64 runs and 256 events per run are retained, event pages contain at most 100 events and 48 KiB, and oversized completion/status/result/stop records are rejected. Evicted cursors and replaced generations fail rather than silently retargeting. This is not persistent storage or a liveness guarantee across process restart. Settlement notifications retain their existing opt-in behavior; stop and result reads do not send notifications, change `returnResults`, or start model work.
+
 ## Configure
 
 ### Helix and Hunk, floating

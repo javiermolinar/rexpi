@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { existsSync, symlinkSync } from "node:fs";
 import rexpi, { agentsKey, returnKey, messagesStopKey } from "../extensions/index.ts";
-import { sandbox, world, uuid, binding } from "./fixtures.mjs";
+import { sandbox, world, uuid, binding, server } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
-import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
+import { BOOTSTRAP_ENV, childBootstrap, decodeBootstrap, encodeBootstrap } from "../lib/state.ts";
+import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
 
 function fixture(t, overrides = {}, settings = {}) {
   const root = sandbox(t), w = world(), events = new Map(), tools = new Map(), commands = new Map(), shortcuts = [], entries = [], notices = [];
   const changes = { REX_SESSION: w.source.sessionId, REX_BLOCK: w.source.blockId, PI_REX_CLI: "/bin/echo",
     PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined,
-    PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, PI_REX_MESSAGES_STOP_KEY: undefined, ...overrides };
+    PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, PI_REX_MESSAGES_STOP_KEY: undefined,
+    PI_REX_AGENT_HANDLE: undefined, ...overrides };
   const old = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(changes)) value === undefined ? delete process.env[key] : process.env[key] = value;
   t.after(() => {
@@ -44,6 +46,10 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.equal(f.tools.has("rex_jump"), false);
   assert.ok(f.tools.has("rex_open_terminal"));
   assert.ok(f.tools.has("rex_open_session"));
+  assert.ok(f.tools.has("rex_agent_stop"));
+  assert.equal(f.tools.get("rex_agent_stop").description, "Stop.");
+  assert.equal(f.tools.get("rex_agent_stop").executionMode, "sequential");
+  assert.equal(f.tools.get("rex_agent_stop").parameters.properties.authorize.const, true);
   assert.ok(f.tools.get("rex_start_pi").parameters.properties.sessionName);
   assert.equal(f.tools.get("rex_start_pi").executionMode, "sequential");
   assert.ok(f.tools.has("rex_return_to_parent"));
@@ -114,6 +120,32 @@ test("bootstrap is consumed once and malformed input cannot quietly launch as a 
   assert.equal(f.w.created.length, 0);
   assert.match(f.notices.at(-1)[0], /unavailable/);
 });
+test("related agent bootstrap matches the child seed and retained handles stale on session replacement", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
+  const handle = agentHandleFromIdentity(seed, { runtimeId: uuid(), runId: uuid(), requestId: "launch-1",
+    messageId: uuid(), endpointGeneration: 1 });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(process.env[AGENT_BOOTSTRAP_ENV], undefined);
+  const status = () => f.tools.get("rex_agent_status").execute("status", { handle }, undefined, undefined, f.ctx);
+  assert.equal((await status()).details.handle.runId, handle.runId);
+  await f.events.get("session_tree")({}, f.ctx);
+  assert.equal((await status()).details.lifecycle.binding, "replaced");
+  assert.equal((await status()).details.evidence, "retained");
+});
+
+test("miscorrelated agent bootstrap is consumed and rejected instead of becoming a root registration", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
+  const handle = agentHandleFromIdentity({ ...seed, conversationId: uuid() }, { runtimeId: uuid(), runId: uuid(),
+    requestId: "launch-1", messageId: uuid(), endpointGeneration: 1 });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(f.tools.size, 0); assert.equal(process.env[AGENT_BOOTSTRAP_ENV], undefined);
+  assert.match(f.notices.at(-1)[0], /does not match|unavailable/);
+});
+
 test("configured commands register only after verification and do not run during setup", async t => {
   const f = fixture(t, {}, { "pi-rex": { commands: {
     ch: { run: ["/bin/echo"], acceptArgs: true, placement: "right" },

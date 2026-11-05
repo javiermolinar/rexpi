@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Launcher, piArguments, placementFor, validateOptions } from "../lib/launch.ts";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
+import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap } from "../lib/agent.ts";
+import { AgentRuntime } from "../lib/agent-runtime.ts";
 import { active, binding, uuid } from "./fixtures.mjs";
 
 const extension = fileURLToPath(new URL("../extensions/index.ts", import.meta.url));
@@ -50,10 +52,30 @@ test("verified launch binds exact task, conversation, session, block and process
   assert.equal(result.identity.taskId, a.runtime.snapshot().state.taskId);
   assert.equal(result.identity.piSessionId, seed.piSessionId);
   assert.equal(result.target.blockId, a.w.next.blockId);
+  assert.equal(result.handle.requestId, "call-1");
+  assert.equal(result.handle.endpointGeneration, 1);
+  const rawHandle = a.w.created[0].find(arg => arg.startsWith(AGENT_BOOTSTRAP_ENV + "="));
+  assert.deepEqual(decodeAgentBootstrap(rawHandle.slice(rawHandle.indexOf("=") + 1)), result.handle);
   assert.ok(a.w.created[0].includes("--shell=none"));
   assert.ok(a.w.created[0].includes("--extension"));
   assert.equal(a.w.created[0].includes("--continue"), false);
 });
+test("related launches register identical created handles and record binding only after exact startup", async t => {
+  const a = await active(t), parent = new AgentRuntime(), child = new AgentRuntime();
+  const launcher = new Launcher(a.runtime, { extension, piBinary: "/bin/echo", agentDirectory: a.root,
+    stateDirectory: a.store.directory, path: process.env.PATH, startupTimeoutMs: 1000, agents: parent });
+  a.w.onCreate = args => acknowledge(a, args);
+  const result = await launcher.launch("related-handle", { related: true }, a.root);
+  assert.equal((await parent.status(result.handle)).lifecycle.binding, "bound");
+  assert.equal((await parent.status(result.handle)).lifecycle.result, "pending");
+  const raw = a.w.created[0].find(arg => arg.startsWith(AGENT_BOOTSTRAP_ENV + "="));
+  const propagated = decodeAgentBootstrap(raw.slice(raw.indexOf("=") + 1));
+  assert.deepEqual(child.register(propagated), result.handle);
+  child.observe(propagated, { type: "binding.verified" });
+  assert.deepEqual(child.register(propagated), parent.register(result.handle));
+  assert.throws(() => decodeAgentBootstrap("not+canonical"), /Invalid agent handle bootstrap/);
+});
+
 test("child launches forward agents and messaging-stop shortcut overrides, including opt-out", async t => {
   for (const key of ["alt+shift+a", "off"]) {
     await t.test(key, async t => {
@@ -74,6 +96,8 @@ test("new independent tasks get a new task identity and a selected session", asy
   assert.equal(result.placement, "session");
   assert.equal(result.startup.state, "bound");
   assert.notEqual(result.identity.taskId, a.runtime.snapshot().state.taskId);
+  assert.equal(result.handle, undefined);
+  assert.equal(a.w.created[0].some(arg => arg.startsWith(AGENT_BOOTSTRAP_ENV + "=")), false);
   assert.equal(a.w.selectCalls, 1);
 });
 test("all Pi placements keep their terminal after the agent exits", async t => {

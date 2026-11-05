@@ -23,6 +23,9 @@ import { observeMessaging, registerMessageSend, registerMessagingControls, stopM
 import { registerConversationTools } from "./conversation.ts";
 import { PeerRuntime } from "../lib/peer.ts";
 import { registerPeerTools } from "./peer.ts";
+import { AgentRuntime } from "../lib/agent-runtime.ts";
+import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap, type AgentHandle } from "../lib/agent.ts";
+import { registerAgentTools } from "./agent.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 
 const schema = Type.Object({
@@ -69,6 +72,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   let launcher: Launcher | undefined;
   let messaging: MessagingRuntime | undefined;
   let peer: PeerRuntime | undefined;
+  const agentRuntime = new AgentRuntime();
   observeMessaging(pi, () => messaging);
   let terminal: TerminalOpener | undefined;
   let sessions: SessionOpener | undefined;
@@ -87,21 +91,31 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const stop = () => {
     activation++; agents.cancel(); worktrees.cancel();
     messaging?.detach(); messaging = undefined;
+    agentRuntime.detach();
     peer?.detach(); peer = undefined;
     runtime?.stop(); runtime = undefined;
     launcher = undefined; terminal = undefined; sessions = undefined;
   };
 
   const initialize = async (ctx: ExtensionContext, allowBootstrap: boolean) => {
+    // Reinitialization is positive local replacement evidence; retained results/events remain readable.
+    agentRuntime.replaceAll();
     stop();
     const generation = activation;
     let seed: Bootstrap | undefined;
+    let agentSeed: AgentHandle | undefined;
     try {
       if (allowBootstrap && !consumed) {
         consumed = true;
-        const raw = process.env[BOOTSTRAP_ENV];
-        delete process.env[BOOTSTRAP_ENV];
+        const raw = process.env[BOOTSTRAP_ENV], rawAgent = process.env[AGENT_BOOTSTRAP_ENV];
+        delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV];
         if (raw) seed = decodeBootstrap(raw);
+        if (rawAgent) {
+          if (!seed) throw new Error("Agent handle bootstrap requires a related launch bootstrap");
+          agentSeed = decodeAgentBootstrap(rawAgent);
+          if (agentSeed.taskId !== seed.taskId || agentSeed.conversationId !== seed.conversationId)
+            throw new Error("Agent handle bootstrap does not match the decoded child seed");
+        }
       }
       if (ctx.mode !== "tui" || !rexId(process.env.REX_BLOCK, "block") || !rexId(process.env.REX_SESSION, "session")) return;
       const rex = new Rex(executable(process.env.PI_REX_CLI ?? "rex", ctx.cwd), (command, args, options) => pi.exec(command, args, options), process.env.PI_REX_SERVER);
@@ -114,12 +128,17 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       peer = new PeerRuntime(pi, active, stateDirectory);
       await peer.attach(ctx);
       if (generation !== activation) { peer.detach(); return; }
+      agentRuntime.attach(peer, peer);
+      if (agentSeed) {
+        agentRuntime.register(agentSeed);
+        agentRuntime.observe(agentSeed, { type: "binding.verified" });
+      }
       const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
       launcher = new Launcher(active, { extension, agentDirectory, stateDirectory, messaging,
         resolveProject: (query, cwd, signal) => resolver.resolve(query, cwd, signal),
         piBinary: process.env.PI_REX_BINARY ?? "pi", path: process.env.PATH ?? "",
         client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY, agentsKey: process.env.PI_REX_AGENTS_KEY,
-        messagesStopKey: process.env.PI_REX_MESSAGES_STOP_KEY });
+        messagesStopKey: process.env.PI_REX_MESSAGES_STOP_KEY, agents: agentRuntime });
       terminal = new TerminalOpener(active);
       sessions = new SessionOpener(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal), process.env.PI_REX_CLIENT);
       if (!shortcutRegistered) {
@@ -181,6 +200,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         registerMessagingControls(pi, () => ({ runtime, messaging }));
         registerConversationTools(pi, () => ({ runtime, messaging }));
         registerPeerTools(pi, () => ({ runtime, peer }));
+        registerAgentTools(pi, () => ({ runtime, peer, agent: agentRuntime }));
         registerTerminalFeatures(pi, () => ({ runtime, terminal }), ctx);
         registerSessionTool(pi, () => ({ runtime, sessions }));
       }
@@ -193,6 +213,20 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   pi.on("session_start", (_event, ctx) => initialize(ctx, true));
   pi.on("session_tree", (_event, ctx) => initialize(ctx, false));
   pi.on("session_shutdown", stop);
+  pi.on("agent_start", (_event, ctx) => {
+    try { peer?.observeAgentStart(ctx); } catch { /* stale or unverified contexts provide no evidence */ }
+  });
+  pi.on("agent_end", (_event, ctx) => {
+    try {
+      const active = runtime;
+      if (!active) return;
+      const own = active.snapshot();
+      if (own.state.piSessionId !== ctx.sessionManager.getSessionId()) return;
+      peer?.observeAgentEnd(ctx);
+      // Local Pi settlement may schedule I/O, but this hook never awaits delivery or starts model work itself.
+      agentRuntime.observeLocalSettlement(own.state);
+    } catch { /* stale or unverified contexts provide no settlement evidence */ }
+  });
   pi.on("before_agent_start", (event) => {
     delete event.systemPromptOptions.sections.rexpi;
     if (!runtime) return;

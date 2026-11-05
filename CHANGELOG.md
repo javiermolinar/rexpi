@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add the standalone supervised-agent lifecycle: related launches return and propagate exact token-free handles; status/events, explicit completion/results, cancellation, and sequential `rex_agent_stop` preserve independent evidence axes.
+- Add explicitly authorized (`authorize:true`) cooperating-endpoint stop using only Pi graceful shutdown, with accepted/closed/disconnected/unknown outcomes, exact generation/runtime fences, and parent/child deduplication. Stop never aborts, kills, restarts, cleans up, retries, or retracts surviving work.
+- Document handle creation versus binding/readiness, bounded retained evidence, pending/unknown results, cancellation acknowledgement versus quiescence, and stop acceptance versus exit.
 - Add authenticated native reads of related live Pi branches and compacted context, plus attributed peer messages with explicit steering/follow-up delivery.
 - Use Rexpi consistently in user-facing messages and internal labels while retaining existing configuration, state, and messaging identifiers for compatibility.
 - Add project path and zoxide lookup to `rex_start_pi`, with session, tab, and split placement kept independent of directory lookup.

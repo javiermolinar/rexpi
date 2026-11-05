@@ -1,4 +1,5 @@
 import { statSync, realpathSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -10,6 +11,8 @@ import { SessionClaim, SessionExistsError, sessionName } from "./session-name.ts
 import type { MessagingRuntime, ReturnTicket } from "./messaging/runtime.ts";
 import { endpointFromBinding, type Endpoint } from "./messaging/protocol.ts";
 import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
+import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
+import type { AgentRuntime } from "./agent-runtime.ts";
 
 export interface LaunchOptions {
   prompt?: string;
@@ -26,12 +29,19 @@ export interface LaunchOptions {
   model?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
+function agentRequestId(launchId: string): string {
+  if (/^[A-Za-z0-9._:-]{1,128}$/.test(launchId)) return launchId;
+  return "launch:" + createHash("sha256").update(launchId).digest("hex");
+}
+
 export interface LaunchResult {
   launchId: string;
   creation: "confirmed" | "unknown";
   placement: Placement;
   identity: Identity;
   origin: Identity;
+  /** Present only for related launches; correlation is not readiness or a capability grant. */
+  handle?: AgentHandle;
   target?: Created;
   startup: { state: "bound" | "unconfirmed"; reason?: string };
   warning?: string;
@@ -51,6 +61,7 @@ export interface LaunchConfig {
   startupTimeoutMs?: number;
   resolveProject?: DirectoryResolver;
   messaging?: Pick<MessagingRuntime, "prepareReturn" | "checkReturn" | "registerReturn" | "revokeReturn">;
+  agents?: Pick<AgentRuntime, "register" | "observe">;
 }
 function text(value: unknown, name: string, max: number): asserts value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > max || value.includes("\0"))
@@ -166,6 +177,10 @@ export class Launcher {
     const client = placement === "session" && focus ? await this.runtime.rex.app(source, this.config.client, combined) : undefined;
     check();
     const seed = childBootstrap(own.state, related, options.role ?? "chat", own.server);
+    const handle = related ? agentHandleFromIdentity(seed, { runtimeId: randomUUID(), runId: randomUUID(),
+      requestId: agentRequestId(id), messageId: randomUUID(), endpointGeneration: 1 }) : undefined;
+    // Created evidence survives even an unknown creation response; no binding/readiness is inferred.
+    if (handle) this.config.agents?.register(handle);
     const title = cleanTitle(options.title ?? options.prompt ?? basename(directory)) || "Pi";
     const taskOptions = ticket ? { ...options, prompt: options.prompt! + "\n\n"
       + "Return scoped findings with rex_message_send: kind=result (question for blockers), stable UUID id, "
@@ -179,13 +194,15 @@ export class Launcher {
       ...(this.config.returnKey !== undefined ? ["PI_REX_RETURN_KEY=" + this.config.returnKey] : []),
       ...(this.config.agentsKey !== undefined ? ["PI_REX_AGENTS_KEY=" + this.config.agentsKey] : []),
       ...(this.config.messagesStopKey !== undefined ? ["PI_REX_MESSAGES_STOP_KEY=" + this.config.messagesStopKey] : []),
-      BOOTSTRAP_ENV + "=" + encodeBootstrap(seed), binary, ...piArguments(taskOptions, seed.piSessionId, extension)];
+      BOOTSTRAP_ENV + "=" + encodeBootstrap(seed),
+      ...(handle ? [AGENT_BOOTSTRAP_ENV + "=" + encodeAgentBootstrap(handle)] : []),
+      binary, ...piArguments(taskOptions, seed.piSessionId, extension)];
     this.runtime.assert(own); combined.throwIfAborted();
     const result: LaunchResult = { launchId: id, creation: "unknown", placement, identity: {
       taskId: seed.taskId, conversationId: seed.conversationId, piSessionId: seed.piSessionId, role: seed.role,
     }, origin: { taskId: own.state.taskId, conversationId: own.state.conversationId,
       piSessionId: own.state.piSessionId, role: own.state.role }, startup: { state: "unconfirmed" },
-      ...(project ? { project: { ...project, directory } } : {}) };
+      ...(handle ? { handle } : {}), ...(project ? { project: { ...project, directory } } : {}) };
     let claim: SessionClaim | undefined;
     try {
       if (name) {
@@ -225,6 +242,13 @@ export class Launcher {
     }
     const observed = await this.waitForStartup(own, result.identity, result.target, combined, ticket ? check : undefined);
     result.startup = observed.startup;
+    if (handle && observed.child && this.config.agents) {
+      try { this.config.agents.observe(handle, { type: "binding.verified" }); }
+      catch (error) {
+        result.warning = (result.warning ? result.warning + " " : "")
+          + "Agent binding evidence could not be recorded: " + (error instanceof Error ? error.message : String(error));
+      }
+    }
     if (ticket) {
       try {
         check();
