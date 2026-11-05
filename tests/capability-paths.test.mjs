@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { capabilityPathToolDefinitions } from "../lib/capability-paths.ts";
 import { CapabilityRuntime } from "../lib/capability-runtime.ts";
 import { registerPeerTools } from "../extensions/peer.ts";
+import { runToolCall } from "../node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js";
 
 const pathFs = {
   realpath: path => fs.realpath(path), lstat: path => fs.lstat(path), stat: path => fs.stat(path),
@@ -215,7 +216,15 @@ test("a post-creation denial preserves created paths and reports incomplete clea
     return handle;
   } };
   const { tools: map } = await tools(root, pathRuntime(root), injected);
-  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /cleanup was incomplete/);
+  const outcome = await runToolCall({ id: "post-create", name: "write", arguments: { path: "new/deep/file", content: "no effects" } }, {
+    tools: [map.get("write")], assistantMessage: { role: "assistant", content: [] }, context: { messages: [], tools: [map.get("write")] },
+  });
+  assert.equal(outcome.isError, true);
+  const text = outcome.result.content[0].text;
+  assert.match(text, /injected post-create replacement fence/);
+  assert.ok(text.includes(target), "caller receives the preserved file path");
+  assert.ok(text.includes(join(root, "new/deep")), "caller receives the created parent path");
+  assert.ok(text.includes(join(root, "new")), "caller receives every created top-level path");
   assert.equal(await fs.readFile(target, "utf8"), "");
   assert.equal(existsSync(join(root, "new/deep")), true);
 });

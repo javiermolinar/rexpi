@@ -128,7 +128,9 @@ test("tail and since pagination are bounded, ordered, and query-bound", () => {
     assert.throws(() => historyPage(entries, "session", "f",
       { view: "branch", direction: "tail", limit: 2, ...change, cursor: first.next }), /Stale|mismatched/);
   assert.throws(() => historyPage(entries, "session", "f", { view: "branch", limit: 2, since: "missing" }), /since/);
-  assert.throws(() => historyPage(entries, "session", "f", { view: "branch", limit: 2, cursor: "not-base64-json" }), /JSON|Unexpected|token/i);
+  assert.throws(() => historyPage(entries, "session", "f", { view: "branch", limit: 2, cursor: "not-base64-json" }), /cursor encoding|JSON|Unexpected|token/i);
+  assert.throws(() => historyPage(entries, "session", "f",
+    { view: "branch", direction: "tail", limit: 2, cursor: first.next + "$" }), /cursor encoding/);
 });
 
 test("type filters and text projection preserve entry identity and raw-view behavior", () => {
@@ -194,6 +196,19 @@ test("conversation responses enforce exact metadata, requested limits, bytes, en
     const result = structuredClone(valid); mutate(result);
     assert.throws(() => validatePeerReadResult(result, { limit: 1 }, target), /conversation|Invalid|Stale|mismatched|Unexpected|JSON|Expected/i);
   }
+  const filtered = historyPage([raw, { ...raw, id: "b" }], "session", "b", { view: "branch", limit: 1, types: ["message"] });
+  const wrongType = { target: identity, ...filtered, activity: { idle: true, pendingMessages: false } };
+  wrongType.entries = [{ id: "a", type: "custom", data: "not requested" }];
+  wrongType.bytes = Buffer.byteLength(JSON.stringify(wrongType.entries[0]));
+  assert.throws(() => validatePeerReadResult(wrongType, { limit: 1, types: ["message"] }, target), /type filter/);
+  const filteredText = historyPage([raw, { ...raw, id: "b" }], "session", "b",
+    { view: "branch", limit: 1, types: ["message"], textOnly: true });
+  const wrongTextType = { target: identity, ...filteredText, activity: { idle: true, pendingMessages: false } };
+  wrongTextType.entries = [{ id: "a", type: "custom", text: "not requested" }];
+  wrongTextType.bytes = Buffer.byteLength(JSON.stringify(wrongTextType.entries[0]));
+  assert.throws(() => validatePeerReadResult(wrongTextType, { limit: 1, types: ["message"], textOnly: true }, target), /type filter/);
+  const noncanonical = structuredClone(valid); noncanonical.next += "$";
+  assert.throws(() => validatePeerReadResult(noncanonical, { limit: 1 }, target), /cursor encoding/);
   const oversized = { ...valid, entries: [{ id: "large", type: "custom", data: "x".repeat(49 * 1024) }], next: undefined };
   delete oversized.next;
   assert.throws(() => validatePeerReadResult(oversized, { limit: 1 }, target), /exceeds 48 KiB/);

@@ -112,8 +112,12 @@ export class CapabilityPathCoordinator {
       } catch (error) {
         await this.closeEdit(state);
         const cleanupError = await this.cleanup(state);
-        if (cleanupError) throw new AggregateError([error, cleanupError],
-          "Capability path operation failed and coordinator-created path cleanup was incomplete");
+        if (cleanupError) {
+          const operation = error instanceof Error ? error.message : String(error);
+          const cleanup = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          throw new Error("Capability path operation failed and coordinator-created path cleanup was incomplete: "
+            + operation + "; " + cleanup);
+        }
         throw error;
       } finally {
         await this.closeEdit(state);

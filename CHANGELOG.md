@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Include original failures and every preserved artifact path in caller-visible capability tool errors, enforce requested entry types on conversation responses, reject noncanonical cursor encodings, and align cleanup documentation with preserved-artifact behavior.
 - Disable automatic rollback deletion for capability-created paths because pathname identity checks cannot make unlink/rmdir race-safe; post-creation failures now preserve and report every artifact for explicit inspection.
 - Fail closed when any grant-shaped bootstrap has malformed identity/agent metadata, abort later turns for already expired or revoked runtimes, and preserve uncertain replacement paths with explicit incomplete-cleanup errors when created-inode identity is unavailable.
 - Anchor delegated relative path grants to the parent cwd, propagate absolute parent deadlines through one-shot metadata, check deadlines at tool/turn boundaries even with delayed timers, strictly validate conversation response metadata and measured byte bounds, and register newly created paths for cleanup before fallible identity checks.

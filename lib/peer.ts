@@ -245,6 +245,8 @@ function encodeCursor(sessionId: string, leafId: string | null, anchor: string, 
   return encoded;
 }
 function decodeCursor(raw: string, sessionId: string, leafId: string | null, query: HistoryQuery): string {
+  if (!raw.length || !/^[A-Za-z0-9_-]+$/.test(raw) || Buffer.from(raw, "base64url").toString("base64url") !== raw)
+    throw new Error("Invalid conversation cursor encoding");
   const v = record(JSON.parse(Buffer.from(raw, "base64url").toString("utf8")));
   keys(v, ["version", "sessionId", "leafId", "anchor", "query"]);
   if (v.version !== 2 || v.sessionId !== sessionId || v.leafId !== leafId || v.query !== queryDigest(query)
@@ -338,6 +340,8 @@ export function validatePeerReadResult(value: unknown, input: PeerReadInput, tar
     if (typeof entry.id !== "string" || !entry.id.length || entry.id.length > 2048 || ids.has(entry.id)
         || typeof entry.type !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(entry.type))
       throw new Error("Invalid conversation read entry");
+    if (expectedTypes.length && !expectedTypes.includes(entry.type))
+      throw new Error("Conversation response entry violates the requested type filter");
     ids.add(entry.id);
     if (checked.textOnly) {
       keys(entry, ["id", "type", "text"]);
