@@ -1,0 +1,199 @@
+import { parseCapabilityGrant, type CapabilityGrant, type LaunchOptions } from "./launch.ts";
+
+export interface CapabilityContext {
+  abort(): void;
+}
+
+export interface CapabilityTimer {
+  unref?(): void;
+}
+
+export interface CapabilityClock {
+  now(): number;
+  setTimeout(callback: () => void, timeoutMs: number): CapabilityTimer;
+  clearTimeout(timer: CapabilityTimer): void;
+}
+
+const systemClock: CapabilityClock = {
+  now: () => performance.now(),
+  setTimeout: (callback, timeoutMs) => setTimeout(callback, timeoutMs),
+  clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
+export interface ToolGateResult {
+  block: true;
+  reason: string;
+}
+
+const blocked = (reason: string): ToolGateResult => ({ block: true, reason });
+const subset = (child: readonly string[], parent: readonly string[]): boolean => {
+  const allowed = new Set(parent);
+  return child.every(value => allowed.has(value));
+};
+
+/** Exact-array attenuation only. Paths remain literal and are not authorized here. */
+export function attenuateCapabilityGrant(parent: CapabilityGrant, value: unknown, remainingTimeoutMs: number): CapabilityGrant {
+  if (value === undefined) throw new Error("Capability delegation denied: an explicit child grant is required");
+  const child = parseCapabilityGrant(value);
+  if (!subset(child.tools, parent.tools) || !subset(child.readPaths, parent.readPaths)
+      || !subset(child.writePaths, parent.writePaths))
+    throw new Error("Capability delegation denied: child tools/readPaths/writePaths must be parent subsets");
+  if (child.delegation.maxDepth > parent.delegation.maxDepth - 1)
+    throw new Error("Capability delegation denied: child maxDepth exceeds the attenuated parent depth");
+  if (child.returnResults && !parent.returnResults)
+    throw new Error("Capability delegation denied: child returnResults exceeds the parent grant");
+  if (child.turns > parent.turns)
+    throw new Error("Capability delegation denied: child turns exceed the parent grant");
+  if (child.timeoutMs > remainingTimeoutMs)
+    throw new Error("Capability delegation denied: child timeoutMs exceeds the remaining parent timeout");
+  return child;
+}
+
+/**
+ * Authority for one decoded child incarnation. It is never persisted or restored.
+ * The sole timer begins at construction (bootstrap consumption), not at agent_start.
+ */
+export class CapabilityRuntime {
+  private readonly grant: CapabilityGrant;
+  private readonly clock: CapabilityClock;
+  private readonly startedAt: number;
+  private readonly controller = new AbortController();
+  private readonly onNotice?: (message: string) => void;
+  private timer: CapabilityTimer | undefined;
+  private state: "active" | "expired" | "revoked" = "active";
+  private context: CapabilityContext | undefined;
+  private turnsStarted = 0;
+  private turnLimitDenied = false;
+  private turnNotice = false;
+  private timeoutNotice = false;
+  private retainedNotice: string | undefined;
+
+  constructor(grant: CapabilityGrant, options: { clock?: CapabilityClock; onNotice?: (message: string) => void } = {}) {
+    this.grant = parseCapabilityGrant(grant);
+    this.clock = options.clock ?? systemClock;
+    this.onNotice = options.onNotice;
+    this.startedAt = this.clock.now();
+    const timer = this.clock.setTimeout(() => {
+      this.timer = undefined;
+      this.expire();
+    }, this.grant.timeoutMs);
+    this.timer = timer;
+    timer.unref?.();
+  }
+
+  get signal(): AbortSignal { return this.controller.signal; }
+  get notice(): string | undefined { return this.retainedNotice; }
+
+  allowsTool(name: string): boolean { return this.grant.tools.includes(name); }
+
+  /** Literal child-grant paths only; resolution and filesystem authority stay in capability-paths. */
+  pathGrants(): { readPaths: string[]; writePaths: string[] } {
+    return { readPaths: [...this.grant.readPaths], writePaths: [...this.grant.writePaths] }; }
+
+  attachContext(context: CapabilityContext): void { this.context = context; }
+
+  private abortCurrent(): void {
+    try { this.context?.abort(); } catch { /* denial remains enforced even if the host abort hook fails */ }
+  }
+
+  private emitNotice(message: string): void {
+    this.retainedNotice = message;
+    try { this.onNotice?.(message); } catch { /* a UI failure cannot weaken enforcement */ }
+  }
+
+  private inactiveDenial(): ToolGateResult {
+    return blocked(this.state === "expired"
+      ? "Capability grant expired; current and future work is denied"
+      : "Capability grant was revoked; this incarnation has no tool authority");
+  }
+
+  private expire(): void {
+    if (this.state !== "active") return;
+    this.state = "expired";
+    if (this.timer) this.clock.clearTimeout(this.timer);
+    this.timer = undefined;
+    this.controller.abort();
+    this.abortCurrent();
+    if (!this.timeoutNotice) {
+      this.timeoutNotice = true;
+      this.emitNotice("Capability grant expired; aborted current work and denied future turns");
+    }
+  }
+
+  /** Replacement and shutdown are permanent revocation, never a reset into an ungoverned runtime. */
+  revoke(): void {
+    if (this.state === "revoked") return;
+    this.state = "revoked";
+    if (this.timer) this.clock.clearTimeout(this.timer);
+    this.timer = undefined;
+    this.controller.abort();
+    this.abortCurrent();
+  }
+
+  private remainingTimeoutMs(): number {
+    if (this.state !== "active") return 0;
+    const remaining = this.grant.timeoutMs - Math.max(0, this.clock.now() - this.startedAt);
+    if (remaining <= 0) {
+      this.expire();
+      return 0;
+    }
+    return remaining;
+  }
+
+  deriveChildGrant(value: unknown): CapabilityGrant {
+    if (this.state !== "active") throw new Error(this.inactiveDenial().reason);
+    if (this.grant.delegation.maxDepth <= 0)
+      throw new Error("Capability delegation denied: delegation.maxDepth must be greater than zero");
+    if (this.turnLimitDenied) throw new Error("Capability grant turn limit exhausted; delegation is denied");
+    return attenuateCapabilityGrant(this.grant, value, this.remainingTimeoutMs());
+  }
+
+  deriveChildOptions(options: LaunchOptions): LaunchOptions {
+    return { ...options, grant: this.deriveChildGrant(options.grant) };
+  }
+
+  /** Also aborts in-flight launcher work when the host has supplied its tool signal. */
+  toolSignal(signal?: AbortSignal): AbortSignal {
+    return signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal;
+  }
+
+  /** Called at Pi's actual turn_start boundary, not at agent_start or message construction. */
+  startTurn(context: CapabilityContext): boolean {
+    this.attachContext(context);
+    if (this.state !== "active") {
+      this.abortCurrent();
+      return false;
+    }
+    if (this.turnsStarted >= this.grant.turns) {
+      this.turnLimitDenied = true;
+      this.abortCurrent();
+      if (!this.turnNotice) {
+        this.turnNotice = true;
+        this.emitNotice(`Capability grant denied turn ${this.turnsStarted + 1}: at most ${this.grant.turns} model turns are allowed`);
+      }
+      return false;
+    }
+    this.turnsStarted++;
+    return true;
+  }
+
+  /** Global gate: applies to Rex, built-in, custom, and nested tool_call events alike. */
+  guardTool(toolName: string, input: unknown, context?: CapabilityContext): ToolGateResult | undefined {
+    if (context) this.attachContext(context);
+    if (this.state !== "active") return this.inactiveDenial();
+    if (this.turnLimitDenied) return blocked("Capability grant turn limit exhausted; tool execution is denied");
+    if (!this.allowsTool(toolName)) return blocked("Capability grant denied: tool is not whitelisted");
+    if (toolName === "rex_jump" || toolName === "rex_open_session")
+      return blocked("Capability grant denied: this Pi-opening route cannot propagate a grant");
+    if (toolName === "rex_message_send" && !this.grant.returnResults
+        && typeof input === "object" && input !== null && (input as { kind?: unknown }).kind === "result")
+      return blocked("Capability grant denied: returnResults=false blocks kind=result");
+    if (toolName === "rex_start_pi") {
+      const child = typeof input === "object" && input !== null
+        ? (input as { grant?: unknown }).grant : undefined;
+      try { this.deriveChildGrant(child); }
+      catch (error) { return blocked(error instanceof Error ? error.message : "Capability delegation denied"); }
+    }
+    return undefined;
+  }
+}

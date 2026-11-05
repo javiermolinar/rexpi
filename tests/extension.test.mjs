@@ -6,14 +6,18 @@ import rexpi, { agentsKey, returnKey, messagesStopKey } from "../extensions/inde
 import { sandbox, world, uuid, binding, server } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
 import { BOOTSTRAP_ENV, childBootstrap, decodeBootstrap, encodeBootstrap } from "../lib/state.ts";
+import { CAPABILITY_GRANT_ENV, MAX_CAPABILITY_DELEGATION_DEPTH, decodeCapabilityGrant, encodeCapabilityGrant } from "../lib/launch.ts";
 import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
+
+const enforcementGrant = (change = {}) => ({ tools: ["rex_start_pi"], readPaths: ["/repo"], writePaths: ["/repo/out"],
+  delegation: { maxDepth: 1 }, returnResults: false, turns: 2, timeoutMs: 10_000, ...change });
 
 function fixture(t, overrides = {}, settings = {}) {
   const root = sandbox(t), w = world(), events = new Map(), tools = new Map(), commands = new Map(), shortcuts = [], entries = [], notices = [];
   const changes = { REX_SESSION: w.source.sessionId, REX_BLOCK: w.source.blockId, PI_REX_CLI: "/bin/echo",
     PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined,
     PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, PI_REX_MESSAGES_STOP_KEY: undefined,
-    PI_REX_AGENT_HANDLE: undefined, ...overrides };
+    PI_REX_AGENT_HANDLE: undefined, PI_REX_CAPABILITY_GRANT: undefined, ...overrides };
   const old = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(changes)) value === undefined ? delete process.env[key] : process.env[key] = value;
   t.after(() => {
@@ -144,6 +148,133 @@ test("miscorrelated agent bootstrap is consumed and rejected instead of becoming
   await f.events.get("session_start")({}, f.ctx);
   assert.equal(f.tools.size, 0); assert.equal(process.env[AGENT_BOOTSTRAP_ENV], undefined);
   assert.match(f.notices.at(-1)[0], /does not match|unavailable/);
+});
+
+test("child bootstrap consumes grants once; restored entries and replacement launches cannot recreate them", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
+  const value = enforcementGrant({ tools: ["read", "rex_start_pi"], readPaths: ["/repo/exact"], writePaths: [], turns: 3 });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(process.env[CAPABILITY_GRANT_ENV], undefined);
+  assert.ok(f.tools.has("rex_start_pi"));
+  assert.equal(f.tools.has("rex_open_terminal"), false, "only whitelisted Rex tools register");
+  assert.equal(f.entries.some(entry => JSON.stringify(entry).includes("readPaths")), false);
+  const parameters = f.tools.get("rex_start_pi").parameters.properties.grant;
+  assert.deepEqual(parameters.required, ["tools", "readPaths", "writePaths", "delegation", "returnResults", "turns", "timeoutMs"]);
+  assert.equal(parameters.additionalProperties, false);
+  assert.equal(parameters.properties.delegation.properties.maxDepth.maximum, MAX_CAPABILITY_DELEGATION_DEPTH);
+  f.entries.push({ type: "custom", customType: "pi-rex.orientation", data: { ...seed, grant: value } });
+  await f.events.get("session_tree")({}, f.ctx);
+  await assert.rejects(f.tools.get("rex_start_pi").execute("replacement-child", { prompt: JSON.stringify(value), role: "review" },
+    undefined, undefined, f.ctx), /revoked/);
+  assert.equal(f.w.created.length, 0, "restored grant-like entries cannot renew authority or create an ungoverned child");
+});
+
+test("granted runtimes filter Rex registration and globally gate built-in, custom, nested, result, and Pi-opening calls", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
+  const value = enforcementGrant({ tools: ["read", "rex_message_send", "rex_return_to_parent", "rex_open_session", "rex_jump"],
+    delegation: { maxDepth: 0 } });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.deepEqual([...f.tools.keys()].sort(), ["read", "rex_message_send", "rex_open_session", "rex_return_to_parent"]);
+  const guard = (toolName, input = {}) => f.events.get("tool_call")({ toolName, input }, f.ctx);
+  assert.equal(guard("read"), undefined);
+  assert.equal(guard("read", { nested: true }), undefined);
+  for (const name of ["bash", "write", "custom", "codemode"]) assert.equal(guard(name).block, true);
+  assert.match(guard("rex_message_send", { kind: "result" }).reason, /returnResults=false/);
+  assert.equal(guard("rex_message_send", { kind: "progress" }), undefined);
+  assert.equal(guard("rex_message_send", { kind: "question" }), undefined);
+  assert.equal(guard("rex_return_to_parent"), undefined, "focus return is not result-return permission");
+  for (const name of ["rex_jump", "rex_open_session"]) assert.match(guard(name).reason, /cannot propagate a grant/);
+});
+
+test("rex_start_pi requires and propagates an explicit attenuated child grant", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
+  const value = enforcementGrant({ tools: ["rex_start_pi", "read"] });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  const start = f.tools.get("rex_start_pi");
+  await assert.rejects(start.execute("missing-grant", { related: true }, undefined, undefined, f.ctx), /explicit child grant/);
+  assert.equal(f.w.created.length, 0);
+  const store = new BindingStore(join(f.root, "bindings"));
+  f.w.onCreate = args => {
+    const raw = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
+    store.write(binding(decodeBootstrap(raw.slice(raw.indexOf("=") + 1)), { blockId: f.w.next.blockId }));
+  };
+  const childGrant = enforcementGrant({ tools: ["read"], readPaths: [], writePaths: [],
+    delegation: { maxDepth: 0 }, turns: 1, timeoutMs: 5000 });
+  const result = await start.execute("valid-child", { related: true, grant: childGrant }, undefined, undefined, f.ctx);
+  assert.equal(result.details.startup.state, "bound");
+  const raw = f.w.created[0].find(arg => arg.startsWith(CAPABILITY_GRANT_ENV + "="));
+  assert.deepEqual(decodeCapabilityGrant(raw.slice(raw.indexOf("=") + 1)), childGrant);
+  await f.commands.get("rxn").handler("must not launch", f.ctx);
+  assert.equal(f.w.created.length, 1, "slash commands cannot create an ungoverned Pi");
+  assert.match(f.notices.at(-1)[0], /capability-granted runtime/);
+  f.events.get("session_shutdown")({}, f.ctx);
+  await assert.rejects(start.execute("after-shutdown", { related: true, grant: childGrant }, undefined, undefined, f.ctx), /revoked/);
+  assert.equal(f.w.created.length, 1);
+});
+
+test("delegation zero rejects even a schema-valid child before native creation", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
+  const value = enforcementGrant({ delegation: { maxDepth: 0 } });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  const childGrant = enforcementGrant({ tools: [], readPaths: [], writePaths: [], delegation: { maxDepth: 0 } });
+  await assert.rejects(f.tools.get("rex_start_pi").execute("depth-zero", { related: true, grant: childGrant },
+    undefined, undefined, f.ctx), /maxDepth must be greater than zero/);
+  assert.equal(f.w.created.length, 0);
+});
+
+test("turn_start enforces the exact boundary once; omitted grants retain ordinary tool and turn behavior", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed),
+    PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(enforcementGrant({ tools: ["read"] })) });
+  await f.events.get("session_start")({}, f.ctx);
+  let aborts = 0;
+  const turnCtx = { ...f.ctx, abort: () => { aborts++; } };
+  const turn = () => f.events.get("turn_start")({}, turnCtx);
+  turn(); turn();
+  assert.equal(aborts, 0);
+  turn(); turn();
+  assert.equal(aborts, 2, "each excess turn is aborted, while the bounded notice is not duplicated");
+  assert.equal(f.notices.filter(([message]) => /denied turn 3/.test(message)).length, 1);
+
+  const plain = fixture(t);
+  await plain.events.get("session_start")({}, plain.ctx);
+  assert.equal(plain.events.get("tool_call")({ toolName: "anything", input: {} }, plain.ctx), undefined);
+  plain.events.get("turn_start")({}, plain.ctx);
+  assert.ok(plain.tools.has("rex_start_pi"));
+  assert.ok(plain.tools.has("rex_open_session"));
+});
+
+test("an unrelated session cannot adopt a grant envelope", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, false, "chat", server), piSessionId: "factory-session" };
+  const value = { tools: [], readPaths: [], writePaths: [], delegation: { maxDepth: 0 },
+    returnResults: false, turns: 1, timeoutMs: 1 };
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(process.env[CAPABILITY_GRANT_ENV], undefined);
+  assert.equal(f.tools.size, 0);
+  assert.match(f.notices.at(-1)[0], /requires a related launch/);
+});
+
+test("malformed child grant input is consumed and fails closed", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: "invalid" });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(process.env[CAPABILITY_GRANT_ENV], undefined);
+  assert.equal(f.tools.size, 0);
+  assert.equal(f.w.created.length, 0);
+  assert.match(f.notices.at(-1)[0], /Invalid capability grant bootstrap/);
+  assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx).block, true);
 });
 
 test("configured commands register only after verification and do not run during setup", async t => {

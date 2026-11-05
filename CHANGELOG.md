@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add one-shot related-launch capability grants for literal tool whitelists, attenuated delegation, result return, model turns, whole-incarnation timeouts, and authorized read/write/edit paths. Grants are in memory, revoked on replacement, and preserve ungranted launch compatibility.
+- Add canonical path containment, no-follow and replacement fences, descriptor-based file I/O, hardlink-write denial, and missing-parent cleanup. Document the residual non-atomic ancestor-lookup limitation and that explicitly granted shell tools are not OS-sandboxed.
+- Extend related conversation reads with bounded head/tail pagination, exclusive since entries, entry-type filters, and stable text-only projections; cursors now bind the complete query and stale leaf.
 - Pin the verified startup endpoint incarnation and reject first-contact same-bootstrap replacements before accepting status/results or issuing cancellation/stop effects; correct legacy protocol-safe request-ID documentation.
 - Add the standalone supervised-agent lifecycle: related launches return and propagate exact token-free handles; status/events, explicit completion/results, cancellation, and sequential `rex_agent_stop` preserve independent evidence axes.
 - Add explicitly authorized (`authorize:true`) cooperating-endpoint stop using only Pi graceful shutdown, with accepted/closed/disconnected/unknown outcomes, exact generation/runtime fences, and parent/child deduplication. Stop never aborts, kills, restarts, cleans up, retries, or retracts surviving work.

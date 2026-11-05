@@ -20,9 +20,13 @@ const PROTOCOL = "pi-rex.peer";
 const VIEWS = ["branch", "context"] as const;
 const DELIVERIES = ["steer", "followUp"] as const;
 type View = typeof VIEWS[number];
+type Direction = "head" | "tail";
 type Delivery = typeof DELIVERIES[number];
 
-export interface PeerReadInput { view?: View; limit?: number; cursor?: string }
+export interface PeerReadInput {
+  view?: View; direction?: Direction; limit?: number; cursor?: string; since?: string;
+  types?: string[]; textOnly?: boolean;
+}
 export interface PeerSendInput {
   id: string; requestId: string; kind: Kind; text: string; delivery: Delivery; triggerTurn: boolean;
 }
@@ -90,7 +94,8 @@ export function isPeerAgentResultEvidenceError(error: unknown): error is PeerAge
 
 export interface PeerReadResult {
   target: Identity; sessionId: string; leafId: string | null; view: View;
-  entries: unknown[]; bytes: number; next?: string;
+  direction: Direction; entries: unknown[]; bytes: number; next?: string;
+  since?: string; types?: string[]; textOnly: boolean;
   activity: { idle: boolean; pendingMessages: boolean };
 }
 export interface PeerSendResult {
@@ -156,13 +161,22 @@ function text(value: unknown, max: number): string {
 }
 function readInput(value: unknown): PeerReadInput {
   const v = record(value);
-  keys(v, ["view", "limit", "cursor"].filter(key => Object.hasOwn(v, key)));
-  const view = v.view ?? "branch", limit = v.limit ?? 20;
+  keys(v, ["view", "direction", "limit", "cursor", "since", "types", "textOnly"].filter(key => Object.hasOwn(v, key)));
+  const view = v.view ?? "branch", direction = v.direction ?? "head", limit = v.limit ?? 20, textOnly = v.textOnly ?? false;
   if (typeof view !== "string" || !VIEWS.includes(view as View)
+      || !["head", "tail"].includes(String(direction))
       || !Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 100
-      || (v.cursor !== undefined && (typeof v.cursor !== "string" || !v.cursor.length || v.cursor.length > 2048)))
+      || (v.cursor !== undefined && (typeof v.cursor !== "string" || !v.cursor.length || v.cursor.length > 2048))
+      || (v.since !== undefined && (typeof v.since !== "string" || !v.since.length || v.since.length > 2048))
+      || typeof textOnly !== "boolean")
     throw new Error("Invalid conversation read parameters");
-  return { view: view as View, limit: Number(limit), ...(v.cursor === undefined ? {} : { cursor: v.cursor as string }) };
+  if (v.types !== undefined && (!Array.isArray(v.types) || v.types.length > 16
+      || v.types.some(type => typeof type !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(type))
+      || new Set(v.types).size !== v.types.length)) throw new Error("Invalid conversation entry-type filter");
+  return { view: view as View, direction: direction as Direction, limit: Number(limit), textOnly,
+    ...(v.cursor === undefined ? {} : { cursor: v.cursor as string }),
+    ...(v.since === undefined ? {} : { since: v.since as string }),
+    ...(v.types === undefined ? {} : { types: [...v.types] as string[] }) };
 }
 function sendInput(value: unknown): PeerSendInput {
   const v = record(value);
@@ -214,43 +228,84 @@ function socketPath(directory: string, target: Endpoint): string {
   const digest = createHash("sha256").update([target.serverInstance, target.conversationId, target.token].join(":")).digest("hex");
   return join(directory, "peers", digest.slice(0, 40) + ".sock");
 }
-function encodeCursor(sessionId: string, leafId: string, view: View, after: string): string {
-  return Buffer.from(JSON.stringify({ version: 1, sessionId, leafId, view, after })).toString("base64url");
+interface HistoryQuery {
+  view: View; direction: Direction; types: string[]; textOnly: boolean; since?: string;
 }
-function decodeCursor(raw: string, sessionId: string, leafId: string | null, view: View): string {
+function historyQuery(input: PeerReadInput): HistoryQuery {
+  return { view: input.view ?? "branch", direction: input.direction ?? "head",
+    types: [...(input.types ?? [])].sort(), textOnly: input.textOnly ?? false,
+    ...(input.since === undefined ? {} : { since: input.since }) };
+}
+function queryDigest(query: HistoryQuery): string {
+  return createHash("sha256").update(JSON.stringify(query)).digest("hex");
+}
+function encodeCursor(sessionId: string, leafId: string | null, anchor: string, query: HistoryQuery): string {
+  return Buffer.from(JSON.stringify({ version: 2, sessionId, leafId, anchor, query: queryDigest(query) })).toString("base64url");
+}
+function decodeCursor(raw: string, sessionId: string, leafId: string | null, query: HistoryQuery): string {
   const v = record(JSON.parse(Buffer.from(raw, "base64url").toString("utf8")));
-  keys(v, ["version", "sessionId", "leafId", "view", "after"]);
-  if (v.version !== 1 || v.sessionId !== sessionId || v.leafId !== leafId || v.view !== view
-      || typeof v.after !== "string" || !v.after) throw new Error("Stale or mismatched conversation cursor");
-  return v.after;
+  keys(v, ["version", "sessionId", "leafId", "anchor", "query"]);
+  if (v.version !== 2 || v.sessionId !== sessionId || v.leafId !== leafId || v.query !== queryDigest(query)
+      || typeof v.anchor !== "string" || !v.anchor) throw new Error("Stale or mismatched conversation cursor");
+  return v.anchor;
+}
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter(block => record(block).type === "text" && typeof record(block).text === "string")
+    .map(block => record(block).text).join("");
+}
+function projectedText(raw: unknown): string {
+  const entry = record(raw);
+  if (entry.type === "message") return contentText(record(entry.message).content);
+  if (entry.type === "custom_message") return contentText(entry.content);
+  if (entry.type === "compaction" || entry.type === "branch_summary") return typeof entry.summary === "string" ? entry.summary : "";
+  return "";
 }
 export function historyPage(entries: readonly unknown[], sessionId: string, leafId: string | null,
-    input: Required<Pick<PeerReadInput, "view" | "limit">> & Pick<PeerReadInput, "cursor">): Omit<PeerReadResult, "target" | "activity"> {
+    input: Required<Pick<PeerReadInput, "view" | "limit">> & Pick<PeerReadInput,
+      "cursor" | "direction" | "since" | "types" | "textOnly">): Omit<PeerReadResult, "target" | "activity"> {
   if (entries.length > 100_000) throw new Error("Conversation entry bound exceeded");
-  const view = input.view;
-  let start = 0;
+  const query = historyQuery(input), records = entries.map((raw, index) => {
+    const entry = record(raw), id = entry.id;
+    if (typeof id !== "string" || !id || typeof entry.type !== "string") throw new Error("Invalid conversation entries");
+    return { raw, id, type: entry.type, index };
+  });
+  if (new Set(records.map(entry => entry.id)).size !== records.length) throw new Error("Invalid conversation entries");
+  let eligible = records;
+  if (query.since !== undefined) {
+    const since = records.findIndex(entry => entry.id === query.since);
+    if (since < 0) throw new Error("Conversation since entry is no longer on the active view");
+    eligible = eligible.filter(entry => entry.index > since);
+  }
+  if (query.types.length) eligible = eligible.filter(entry => query.types.includes(entry.type));
   if (input.cursor !== undefined) {
-    const after = decodeCursor(input.cursor, sessionId, leafId, view);
-    start = entries.findIndex(raw => record(raw).id === after) + 1;
-    if (!start) throw new Error("Conversation cursor is no longer on the active view");
+    const anchor = decodeCursor(input.cursor, sessionId, leafId, query);
+    const position = eligible.findIndex(entry => entry.id === anchor);
+    if (position < 0) throw new Error("Conversation cursor is no longer on the active query");
+    eligible = eligible.filter((_, index) => query.direction === "head" ? index > position : index < position);
   }
-  const selected: unknown[] = [], seen = new Set<string>();
-  let bytes = 0, index = 0;
-  for (const raw of entries) {
-    const id = record(raw).id;
-    if (typeof id !== "string" || !id || seen.has(id)) throw new Error("Invalid conversation entries");
-    seen.add(id);
-  }
-  for (index = start; index < entries.length && selected.length < input.limit; index++) {
-    const raw = entries[index], body = JSON.stringify(raw), size = Buffer.byteLength(body);
-    if (size > MAX_HISTORY_ENTRY_BYTES) throw new Error("Conversation entry " + record(raw).id + " exceeds 48 KiB");
+  const ordered = query.direction === "tail" ? [...eligible].reverse() : eligible;
+  const selected: { value: unknown; id: string; bytes: number }[] = [];
+  let bytes = 0, traversed = 0;
+  for (; traversed < ordered.length && selected.length < input.limit; traversed++) {
+    const entry = ordered[traversed], rawBody = JSON.stringify(entry.raw);
+    if (Buffer.byteLength(rawBody) > MAX_HISTORY_ENTRY_BYTES)
+      throw new Error("Conversation entry " + entry.id + " exceeds 48 KiB");
+    const value = query.textOnly ? { id: entry.id, type: entry.type, text: projectedText(entry.raw) } : entry.raw;
+    const size = Buffer.byteLength(JSON.stringify(value));
     if (selected.length && bytes + size > MAX_HISTORY_PAGE_BYTES) break;
     if (bytes + size > MAX_HISTORY_PAGE_BYTES) throw new Error("Conversation page exceeds 48 KiB");
-    selected.push(raw); bytes += size;
+    selected.push({ value, id: entry.id, bytes: size }); bytes += size;
   }
-  const next = index < entries.length
-    ? encodeCursor(sessionId, leafId!, view, record(selected.at(-1)).id as string) : undefined;
-  return { sessionId, leafId, view, entries: selected, bytes, ...(next ? { next } : {}) };
+  if (query.direction === "tail") selected.reverse();
+  const more = traversed < ordered.length;
+  const anchor = query.direction === "tail" ? selected[0]?.id : selected.at(-1)?.id;
+  const next = more && anchor ? encodeCursor(sessionId, leafId, anchor, query) : undefined;
+  return { sessionId, leafId, view: query.view, direction: query.direction, textOnly: query.textOnly,
+    ...(query.since === undefined ? {} : { since: query.since }),
+    ...(query.types.length ? { types: query.types } : {}),
+    entries: selected.map(entry => entry.value), bytes, ...(next ? { next } : {}) };
 }
 function privateDirectory(path: string): void {
   const stat = lstatSync(path);
@@ -464,7 +519,7 @@ export class PeerRuntime {
       const input = request.params as PeerReadInput, ctx = this.ctx!;
       const entries = input.view === "context" ? ctx.sessionManager.buildContextEntries() : ctx.sessionManager.getBranch();
       const result = historyPage(entries, ctx.sessionManager.getSessionId(), ctx.sessionManager.getLeafId(),
-        { view: input.view ?? "branch", limit: input.limit ?? 20, ...(input.cursor ? { cursor: input.cursor } : {}) });
+        { ...input, view: input.view ?? "branch", limit: input.limit ?? 20 });
       this.guard();
       return { target: this.own!.state, ...result,
         activity: { idle: ctx.isIdle(), pendingMessages: ctx.hasPendingMessages() } };
@@ -595,8 +650,14 @@ export class PeerRuntime {
   }
   async read(target: string, input: PeerReadInput, signal?: AbortSignal): Promise<PeerReadResult> {
     const result = await this.request(target, "read", readInput(input), randomUUID(), signal) as PeerReadResult;
-    if (!Array.isArray(result.entries) || result.target.conversationId !== target || result.view !== (input.view ?? "branch"))
-      throw new Error("Mismatched conversation read response");
+    const expectedTypes = [...(input.types ?? [])].sort();
+    if (!Array.isArray(result.entries) || result.target.conversationId !== target || result.view !== (input.view ?? "branch")
+        || result.direction !== (input.direction ?? "head") || result.textOnly !== (input.textOnly ?? false)
+        || result.since !== input.since || JSON.stringify(result.types ?? []) !== JSON.stringify(expectedTypes)
+        || result.bytes > MAX_HISTORY_PAGE_BYTES || result.entries.length > 100
+        || (input.textOnly && result.entries.some(raw => {
+          const entry = record(raw); return typeof entry.id !== "string" || typeof entry.type !== "string" || typeof entry.text !== "string";
+        }))) throw new Error("Mismatched conversation read response");
     return result;
   }
   async agentActivity(target: string, signal?: AbortSignal): Promise<PeerAgentActivityResult> {

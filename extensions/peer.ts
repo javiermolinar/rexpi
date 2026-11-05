@@ -19,13 +19,18 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
   };
   pi.registerTool({
     name: "rex_read_conversation", label: "Read a related Pi conversation",
-    description: "Read a verified related Pi branch/context without model work. Whole JSON entries, <=100/48 KiB per page; reuse next cursor. Sensitive data.",
+    description: "Read related Pi history without model work. Head/tail, since/type filters, optional text; <=100/48 KiB. Sensitive data.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
       target,
       view: Type.Optional(literalUnion(["branch", "context"] as const, "branch=active history; context=compaction applied. Default branch.")),
+      direction: Type.Optional(literalUnion(["head", "tail"] as const)),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Maximum entries; default 20." })),
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, description: "Previous response's next value; omit to restart." })),
+      since: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
+      types: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }),
+        { maxItems: 16, uniqueItems: true })),
+      textOnly: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();

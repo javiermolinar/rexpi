@@ -101,17 +101,57 @@ Both Pi instances must run the current Rexpi extension in verified local Rex ter
 }
 ```
 
-`rex_read_conversation` returns whole JSON entries from the target's in-memory active branch (`branch`, the default) or compaction-applied view (`context`). Reading does not trigger model work. Pages contain at most 100 entries and 48 KiB; an individual entry over 48 KiB is rejected. Pass the returned `next` value as `cursor` for the next page. A cursor is bound to the target session, leaf, and view, so restart after the conversation changes.
+`rex_read_conversation` reads the target's in-memory active branch (`branch`, the default) or compaction-applied view (`context`). Reading does not trigger model work. The default returns whole JSON entries from the head; `direction:"tail"` selects the newest page while preserving chronological order within the page. `since` excludes the named existing entry and everything before it. `types` filters by entry type, and `textOnly:true` projects each selected entry to `{id,type,text}` without changing the selection.
+
+```json
+{
+  "target": "CHILD_CONVERSATION_UUID",
+  "direction": "tail",
+  "types": ["message"],
+  "textOnly": true,
+  "limit": 10
+}
+```
+
+Pages contain at most 100 entries and 48 KiB; an individual raw entry over 48 KiB is rejected even for text projection. Pass the returned `next` value as `cursor` for the next page. Head cursors move forward and tail cursors move backward. A cursor is bound to the target session, leaf, view, direction, since entry, filters, and projection, so restart after the conversation or query changes.
 
 `rex_peer_message_send` accepts `target`, `requestId`, `kind`, `text`, `delivery` (`steer` or `followUp`), `triggerTurn`, and an optional stable UUID `id`. Text is capped at 32,768 characters, and the complete attributed envelope and transport request must fit 32 KiB and 40 KiB respectively; multibyte text reaches those byte limits before the character cap. It injects an attributed custom message, never a user-role message. `accepted` means the target extension accepted the API call; it does not confirm processing or completion. Failed or uncertain sends are not automatically retried.
 
 Access requires matching task identities and exact live binding/process verification on both sides. Unrelated conversations are rejected. Treat returned history and peer text as sensitive, untrusted data, not authorization for new work.
 
+### Capability-granted children
+
+A related `rex_start_pi` launch can include an explicit `grant`. Omitting `grant` preserves the ordinary ungoverned launch behavior; grants are rejected for unrelated launches.
+
+```json
+{
+  "prompt": "Review this repository",
+  "related": true,
+  "grant": {
+    "tools": ["read", "rex_read_conversation"],
+    "readPaths": ["/repo"],
+    "writePaths": [],
+    "delegation": { "maxDepth": 0 },
+    "returnResults": false,
+    "turns": 4,
+    "timeoutMs": 60000
+  }
+}
+```
+
+`tools` is a literal whitelist enforced for direct and nested Pi tool calls. Only whitelisted Rex tools register, and whitelisted `read`, `write`, and `edit` replace their built-in implementations with authorized operations. `returnResults:false` blocks `rex_message_send` with `kind:"result"`; it does not disable progress/questions, focus return, or the separate launch-level result-subscription option. `turns` caps model turns. `timeoutMs` starts when the child consumes the grant and covers the whole incarnation, not each run.
+
+A granted child can delegate only if `rex_start_pi` is whitelisted and `delegation.maxDepth` is positive. It must supply an explicit child grant with subset tools/paths, depth at most the parent's remaining depth minus one, no greater result/turn authority, and a timeout within the parent's remaining time. Pi-opening routes that cannot propagate grants are denied. Grant envelopes are consumed once and kept only in memory; prompt text, roles, restored entries, unrelated sessions, and replacement sessions cannot recreate them. Tree replacement and shutdown revoke authority.
+
+`readPaths` and `writePaths` accept exact files or directory descendants, resolved against the child cwd. Reads require a read grant; writes require a write grant; edits require both. Canonical containment, no-follow opens, pre/post-open identity checks, and descriptor-based I/O reject traversal, symlink escapes, and observed target/root replacement. Existing hardlinked files are read-only; new files and missing parents can be created inside a granted directory. Denied operations do not intentionally modify the target, and coordinator-created paths are cleaned up after authorization failure.
+
+These are application-level tool grants, not an OS sandbox. Explicitly granting tools such as `bash` permits that tool's own filesystem access. Peer conversation reads expose no caller-selected filesystem path and retain their separate related-task and tool checks. Node does not provide portable atomic `openat` here, so ancestor pathname resolution retains a residual race despite pre/post-open identity fences.
+
 ### Supervised agent lifecycle
 
-Every **related** `rex_start_pi` launch now returns a versioned, token-free `handle` in its `LaunchResult`. Protocol-safe launch IDs are preserved as its `requestId`; other legacy launcher IDs receive deterministic `launch:<sha256>` correlation. The remaining fields correlate the task, child conversation, runtime, run, message, and endpoint generation. The launcher registers the identical handle in the parent, passes it in a separate strictly validated bootstrap value, and the child registers that same value after checking it against the decoded child identity. Independent launches return no handle. There is no handle-discovery, fan-out, delegation, capability-grant, or automatic-recovery API.
+Every **related** `rex_start_pi` launch now returns a versioned, token-free `handle` in its `LaunchResult`. Protocol-safe launch IDs are preserved as its `requestId`; other legacy launcher IDs receive deterministic `launch:<sha256>` correlation. The remaining fields correlate the task, child conversation, runtime, run, message, and endpoint generation. The launcher registers the identical handle in the parent, passes it in a separate strictly validated bootstrap value, and the child registers that same value after checking it against the decoded child identity. Independent launches return no handle.
 
-Handle creation is only local correlation. It remains `created` after an unknown launch outcome and does not prove that a pane, Pi process, binding, or work exists. A `bound` startup means the exact child binding and process were observed, and pins that verified endpoint incarnation for every later observation or effect; it is not task readiness or completion. The first endpoint generation is 1. Pi session replacement stales retained handles instead of retargeting them. Keep the complete handle: changing any identity field, using a foreign or self handle, or using a stale generation fails closed.
+Handle creation is only local correlation. It remains `created` after an unknown launch outcome and does not prove that a pane, Pi process, binding, or work exists. A `bound` startup means the exact child binding and process were observed, and pins that verified endpoint incarnation for every later observation or effect; it is not task readiness or completion. The first endpoint generation is 1. Pi session replacement stales retained handles instead of retargeting them. Keep the complete handle: changing any identity field, using a foreign or self handle, or using a stale generation fails closed. There is no high-level fan-out, delegation scheduler, or automatic-recovery API.
 
 The lifecycle tools are:
 

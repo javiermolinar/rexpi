@@ -58,7 +58,18 @@ test("real endpoint pages active in-memory history without model work", async t 
   const third = await f.parent.peer.read(f.child.endpoint.conversationId, { limit: 100, cursor: second.next });
   const actual = [...first.entries, ...second.entries, ...third.entries].map(entry => entry.id);
   assert.deepEqual(actual, expected); assert.equal(third.next, undefined);
-  assert.ok(ids.every(id => actual.includes(id))); assert.equal(f.child.sent.length, 0);
+  assert.ok(ids.every(id => actual.includes(id)));
+  const tail = await f.parent.peer.read(f.child.endpoint.conversationId,
+    { direction: "tail", limit: 2, textOnly: true });
+  assert.deepEqual(tail.entries.map(entry => entry.id), expected.slice(-2));
+  assert.ok(tail.entries.every(entry => typeof entry.text === "string" && entry.message === undefined));
+  const messageIds = f.child.sm.getBranch().filter(entry => entry.type === "message").map(entry => entry.id);
+  const filtered = await f.parent.peer.read(f.child.endpoint.conversationId,
+    { types: ["message"], since: expected[0], limit: 100, textOnly: true });
+  assert.deepEqual(filtered.entries.map(entry => entry.id), messageIds.slice(1));
+  await assert.rejects(f.parent.peer.read(f.child.endpoint.conversationId,
+    { direction: "tail", cursor: first.next }), /Stale|mismatched/);
+  assert.equal(f.child.sent.length, 0);
 });
 
 test("context view applies compaction while branch view retains raw history", async t => {
@@ -91,6 +102,78 @@ test("cursor binds session, leaf and view; oversized entries and pages fail clos
   const paged = historyPage([entry("a", "a".repeat(30 * 1024)), entry("b", "b".repeat(30 * 1024))],
     "session", "b", { view: "branch", limit: 100 });
   assert.equal(paged.entries.length, 1); assert.ok(paged.next);
+});
+
+test("tail and since pagination are bounded, ordered, and query-bound", () => {
+  const entry = id => ({ id, type: "message", message: { role: "user", content: "text " + id } });
+  const entries = ["a", "b", "c", "d", "e", "f"].map(entry);
+  const first = historyPage(entries, "session", "f", { view: "branch", direction: "tail", limit: 2 });
+  assert.deepEqual(first.entries.map(value => value.id), ["e", "f"]); assert.ok(first.next);
+  const second = historyPage(entries, "session", "f", { view: "branch", direction: "tail", limit: 2, cursor: first.next });
+  assert.deepEqual(second.entries.map(value => value.id), ["c", "d"]); assert.ok(second.next);
+  const third = historyPage(entries, "session", "f", { view: "branch", direction: "tail", limit: 2, cursor: second.next });
+  assert.deepEqual(third.entries.map(value => value.id), ["a", "b"]); assert.equal(third.next, undefined);
+
+  const sinceTail = historyPage(entries, "session", "f", { view: "branch", direction: "tail", limit: 2, since: "c" });
+  assert.deepEqual(sinceTail.entries.map(value => value.id), ["e", "f"]);
+  const sinceTailRest = historyPage(entries, "session", "f",
+    { view: "branch", direction: "tail", limit: 2, since: "c", cursor: sinceTail.next });
+  assert.deepEqual(sinceTailRest.entries.map(value => value.id), ["d"]); assert.equal(sinceTailRest.next, undefined);
+  const sinceHead = historyPage(entries, "session", "f", { view: "branch", limit: 2, since: "c" });
+  assert.deepEqual(sinceHead.entries.map(value => value.id), ["d", "e"]);
+  assert.deepEqual(historyPage(entries, "session", "f",
+    { view: "branch", limit: 2, since: "c", cursor: sinceHead.next }).entries.map(value => value.id), ["f"]);
+
+  for (const change of [{ direction: "head" }, { since: "a" }, { types: ["message", "custom"] }, { textOnly: true }, { view: "context" }])
+    assert.throws(() => historyPage(entries, "session", "f",
+      { view: "branch", direction: "tail", limit: 2, ...change, cursor: first.next }), /Stale|mismatched/);
+  assert.throws(() => historyPage(entries, "session", "f", { view: "branch", limit: 2, since: "missing" }), /since/);
+  assert.throws(() => historyPage(entries, "session", "f", { view: "branch", limit: 2, cursor: "not-base64-json" }), /JSON|Unexpected|token/i);
+});
+
+test("type filters and text projection preserve entry identity and raw-view behavior", () => {
+  const entries = [
+    { id: "a", type: "message", message: { role: "user", content: [{ type: "text", text: "hello " }, { type: "text", text: "world" }] } },
+    { id: "b", type: "custom", customType: "state", data: { secret: false } },
+    { id: "c", type: "custom_message", content: [{ type: "text", text: "custom text" }] },
+    { id: "d", type: "compaction", summary: "summary text" },
+    { id: "e", type: "branch_summary", summary: "branch text" },
+  ];
+  const projected = historyPage(entries, "session", "e", { view: "branch", limit: 100, textOnly: true });
+  assert.deepEqual(projected.entries, [
+    { id: "a", type: "message", text: "hello world" }, { id: "b", type: "custom", text: "" },
+    { id: "c", type: "custom_message", text: "custom text" }, { id: "d", type: "compaction", text: "summary text" },
+    { id: "e", type: "branch_summary", text: "branch text" },
+  ]);
+  assert.equal(projected.bytes, projected.entries.reduce((sum, value) => sum + Buffer.byteLength(JSON.stringify(value)), 0));
+  const filtered = historyPage(entries, "session", "e",
+    { view: "branch", limit: 100, types: ["custom_message", "message"], textOnly: true });
+  assert.deepEqual(filtered.entries.map(value => value.id), ["a", "c"]); assert.deepEqual(filtered.types, ["custom_message", "message"]);
+  const raw = historyPage(entries, "session", "e", { view: "branch", limit: 100 });
+  assert.deepEqual(raw.entries, entries); assert.equal(raw.textOnly, false);
+});
+
+test("tail byte bounds continue backward without merging oversized pages", () => {
+  const entry = (id, text) => ({ id, type: "message", message: { role: "user", content: text } });
+  const entries = [entry("a", "a".repeat(30 * 1024)), entry("b", "b".repeat(30 * 1024))];
+  const tail = historyPage(entries, "session", "b", { view: "branch", direction: "tail", limit: 100 });
+  assert.deepEqual(tail.entries.map(value => value.id), ["b"]); assert.ok(tail.next);
+  const rest = historyPage(entries, "session", "b", { view: "branch", direction: "tail", limit: 100, cursor: tail.next });
+  assert.deepEqual(rest.entries.map(value => value.id), ["a"]); assert.equal(rest.next, undefined);
+  const text = historyPage(entries, "session", "b", { view: "branch", direction: "tail", limit: 1, textOnly: true });
+  assert.equal(text.entries[0].text, "b".repeat(30 * 1024)); assert.ok(text.next);
+});
+
+test("peer read wire validation accepts bounded queries and rejects malformed filters", () => {
+  const from = endpointFromBinding({ version: 1, taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main",
+    serverInstance: uuid(), hostId: uuid(), blockId: rid("block"), token: uuid(), pid: process.pid, expiresAt: Date.now() + 1000 });
+  const to = { ...from, conversationId: uuid(), blockId: rid("block") };
+  const request = params => JSON.stringify({ type: "pi-rex.peer", version: 1, id: uuid(), op: "read", from, to, params });
+  assert.equal(decodePeerRequest(request({ direction: "tail", since: "entry", types: ["message"], textOnly: true })).params.direction, "tail");
+  for (const params of [{ direction: "newest" }, { since: "" }, { types: ["message", "message"] },
+    { types: Array.from({ length: 17 }, (_, i) => "type" + i) }, { types: ["bad type"] },
+    { textOnly: "yes" }, { limit: 0 }, { unknown: true }])
+    assert.throws(() => decodePeerRequest(request(params)), /Invalid conversation|Unexpected/);
 });
 
 test("peer sends preserve attribution and explicit delivery, deduplicate, and never claim completion", async t => {
@@ -294,7 +377,7 @@ test("client transport preserves UTF-8 split inside a response character", async
     socket.once("data", body => {
       const request = JSON.parse(body.toString("utf8").trim());
       const result = { target: f.child.state, sessionId: f.child.sm.getSessionId(), leafId: f.child.sm.getLeafId(),
-        view: "branch", entries: [entry], bytes: Buffer.byteLength(JSON.stringify(entry)),
+        view: "branch", direction: "head", textOnly: false, entries: [entry], bytes: Buffer.byteLength(JSON.stringify(entry)),
         activity: { idle: true, pendingMessages: false } };
       const bytes = Buffer.from(JSON.stringify({ type: "pi-rex.peer", version: 1, id: request.id, ok: true, result }) + "\n");
       const cut = bytes.indexOf(Buffer.from("💩")) + 1;

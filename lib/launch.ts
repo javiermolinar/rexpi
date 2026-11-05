@@ -5,7 +5,7 @@ import { basename, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { executable } from "./executable.ts";
 import { Runtime, type Snapshot } from "./runtime.ts";
-import { BOOTSTRAP_ENV, childBootstrap, cleanTitle, encodeBootstrap, type Identity, type Placement } from "./state.ts";
+import { BOOTSTRAP_ENV, childBootstrap, cleanTitle, encodeBootstrap, record, type Identity, type Placement } from "./state.ts";
 import type { Created } from "./rex.ts";
 import { SessionClaim, SessionExistsError, sessionName } from "./session-name.ts";
 import type { MessagingRuntime, ReturnTicket } from "./messaging/runtime.ts";
@@ -14,6 +14,94 @@ import { agentEndpointId } from "./peer.ts";
 import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
 import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
 import type { AgentRuntime } from "./agent-runtime.ts";
+
+export const CAPABILITY_GRANT_ENV = "PI_REX_CAPABILITY_GRANT";
+export const MAX_CAPABILITY_TOOLS = 64;
+export const MAX_CAPABILITY_PATHS = 64;
+export const MAX_CAPABILITY_TOOL_LENGTH = 128;
+export const MAX_CAPABILITY_PATH_LENGTH = 4096;
+export const MAX_CAPABILITY_DELEGATION_DEPTH = 8;
+export const MAX_CAPABILITY_TURNS = 1000;
+export const MAX_CAPABILITY_TIMEOUT_MS = 86_400_000;
+export const MAX_CAPABILITY_GRANT_JSON_BYTES = 16_384;
+const MAX_CAPABILITY_GRANT_ENCODED_BYTES = 22_000;
+
+const GRANT_FIELDS = ["tools", "readPaths", "writePaths", "delegation", "returnResults", "turns", "timeoutMs"] as const;
+const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** Launch-time metadata only. This type is deliberately absent from Orientation and Binding. */
+export interface CapabilityGrant {
+  tools: string[];
+  /** Exact literal strings; path resolution, globbing, and enforcement belong to a later runtime step. */
+  readPaths: string[];
+  writePaths: string[];
+  /** Zero disables nested delegation; positive values bound nested launch depth. */
+  delegation: { maxDepth: number };
+  returnResults: boolean;
+  turns: number;
+  timeoutMs: number;
+}
+
+function exactGrantFields(value: Record<string, unknown>, fields: readonly string[], label: string): void {
+  if (Object.keys(value).length !== fields.length || fields.some(field => !Object.hasOwn(value, field)))
+    throw new Error(label + " requires exactly its declared fields");
+}
+
+function grantStrings(value: unknown, field: "tools" | "readPaths" | "writePaths"): string[] {
+  const path = field !== "tools";
+  const limit = path ? MAX_CAPABILITY_PATHS : MAX_CAPABILITY_TOOLS;
+  const length = path ? MAX_CAPABILITY_PATH_LENGTH : MAX_CAPABILITY_TOOL_LENGTH;
+  if (!Array.isArray(value) || value.length > limit || new Set(value).size !== value.length)
+    throw new Error("Invalid capability grant " + field);
+  for (const item of value) {
+    if (typeof item !== "string" || !item.length || item.length > length || CONTROL.test(item)
+        || (!path && !TOOL_NAME.test(item))) throw new Error("Invalid capability grant " + field);
+  }
+  return [...value] as string[];
+}
+
+function grantInteger(value: unknown, maximum: number, field: string, minimum = 1): number {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum)
+    throw new Error("Invalid capability grant " + field);
+  return Number(value);
+}
+
+/** Whitelist every field without resolving paths, adding defaults, or changing the grant's meaning. */
+export function parseCapabilityGrant(value: unknown): CapabilityGrant {
+  const input = record(value);
+  exactGrantFields(input, GRANT_FIELDS, "CapabilityGrant");
+  const delegation = record(input.delegation);
+  exactGrantFields(delegation, ["maxDepth"], "CapabilityGrant delegation");
+  if (typeof input.returnResults !== "boolean") throw new Error("Invalid capability grant returnResults");
+  const grant: CapabilityGrant = {
+    tools: grantStrings(input.tools, "tools"),
+    readPaths: grantStrings(input.readPaths, "readPaths"),
+    writePaths: grantStrings(input.writePaths, "writePaths"),
+    delegation: { maxDepth: grantInteger(delegation.maxDepth, MAX_CAPABILITY_DELEGATION_DEPTH, "delegation.maxDepth", 0) },
+    returnResults: input.returnResults,
+    turns: grantInteger(input.turns, MAX_CAPABILITY_TURNS, "turns"),
+    timeoutMs: grantInteger(input.timeoutMs, MAX_CAPABILITY_TIMEOUT_MS, "timeoutMs"),
+  };
+  if (Buffer.byteLength(JSON.stringify(grant)) > MAX_CAPABILITY_GRANT_JSON_BYTES)
+    throw new Error("Capability grant byte bound exceeded");
+  return grant;
+}
+
+/** A separate one-shot child envelope keeps capability data out of token-free identity bootstrap data. */
+export function encodeCapabilityGrant(value: unknown): string {
+  const encoded = Buffer.from(JSON.stringify(parseCapabilityGrant(value))).toString("base64url");
+  if (Buffer.byteLength(encoded) > MAX_CAPABILITY_GRANT_ENCODED_BYTES) throw new Error("Capability grant bootstrap byte bound exceeded");
+  return encoded;
+}
+
+export function decodeCapabilityGrant(raw: string): CapabilityGrant {
+  if (typeof raw !== "string" || !raw.length || Buffer.byteLength(raw) > MAX_CAPABILITY_GRANT_ENCODED_BYTES
+      || !/^[A-Za-z0-9_-]+$/.test(raw) || Buffer.from(raw, "base64url").toString("base64url") !== raw)
+    throw new Error("Invalid capability grant bootstrap");
+  try { return parseCapabilityGrant(JSON.parse(Buffer.from(raw, "base64url").toString("utf8"))); }
+  catch (error) { throw new Error("Invalid capability grant bootstrap: " + (error instanceof Error ? error.message : String(error))); }
+}
 
 export interface LaunchOptions {
   prompt?: string;
@@ -29,6 +117,7 @@ export interface LaunchOptions {
   provider?: string;
   model?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  grant?: CapabilityGrant;
 }
 function agentRequestId(launchId: string): string {
   if (/^[A-Za-z0-9._:-]{1,128}$/.test(launchId)) return launchId;
@@ -69,6 +158,7 @@ function text(value: unknown, name: string, max: number): asserts value is strin
     throw new Error("Invalid " + name);
 }
 export function validateOptions(value: LaunchOptions): void {
+  if (value.grant !== undefined) parseCapabilityGrant(value.grant);
   if (value.project !== undefined) {
     if (value.cwd !== undefined) throw new Error("project and cwd are mutually exclusive");
     text(value.project, "project (maximum 4,096 characters)", 4096);
@@ -91,6 +181,8 @@ export function validateOptions(value: LaunchOptions): void {
   if (value.returnResults !== undefined && typeof value.returnResults !== "boolean") throw new Error("returnResults must be boolean");
   if (value.returnResults && (!value.prompt?.trim() || value.related === false))
     throw new Error("returnResults requires a nonblank delegated task prompt and related=true (or omitted)");
+  const related = value.returnResults || (value.related ?? value.role === "review");
+  if (value.grant !== undefined && !related) throw new Error("grant requires a related launch");
   if (value.focus !== undefined && typeof value.focus !== "boolean") throw new Error("focus must be boolean");
   if (value.placement !== undefined && !["session", "right", "down", "tab"].includes(value.placement)) throw new Error("Invalid placement");
   if (value.thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value.thinking)) throw new Error("Invalid thinking level");
@@ -196,6 +288,7 @@ export class Launcher {
       ...(this.config.agentsKey !== undefined ? ["PI_REX_AGENTS_KEY=" + this.config.agentsKey] : []),
       ...(this.config.messagesStopKey !== undefined ? ["PI_REX_MESSAGES_STOP_KEY=" + this.config.messagesStopKey] : []),
       BOOTSTRAP_ENV + "=" + encodeBootstrap(seed),
+      ...(options.grant !== undefined ? [CAPABILITY_GRANT_ENV + "=" + encodeCapabilityGrant(options.grant)] : []),
       ...(handle ? [AGENT_BOOTSTRAP_ENV + "=" + encodeAgentBootstrap(handle)] : []),
       binary, ...piArguments(taskOptions, seed.piSessionId, extension)];
     this.runtime.assert(own); combined.throwIfAborted();

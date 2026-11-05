@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { Launcher, piArguments, placementFor, validateOptions } from "../lib/launch.ts";
+import { CAPABILITY_GRANT_ENV, Launcher, MAX_CAPABILITY_DELEGATION_DEPTH, MAX_CAPABILITY_PATH_LENGTH,
+  MAX_CAPABILITY_PATHS, MAX_CAPABILITY_TIMEOUT_MS, MAX_CAPABILITY_TOOL_LENGTH, MAX_CAPABILITY_TOOLS, MAX_CAPABILITY_TURNS,
+  decodeCapabilityGrant, encodeCapabilityGrant, parseCapabilityGrant, piArguments, placementFor, validateOptions } from "../lib/launch.ts";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
 import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap } from "../lib/agent.ts";
 import { AgentRuntime } from "../lib/agent-runtime.ts";
@@ -18,6 +20,81 @@ function acknowledge(a, args, change = x => x) {
   a.store.write(binding(change(seed), { blockId: a.w.next.blockId }));
   return seed;
 }
+const capabilityGrant = () => ({ tools: ["read", "write", "rex_start_pi"], readPaths: ["/repo/../literal", "/repo/[exact]"],
+  writePaths: ["/repo/output"], delegation: { maxDepth: 2 }, returnResults: true, turns: 7, timeoutMs: 30_000 });
+const withoutGrantField = (value, field) => { const copy = { ...value }; delete copy[field]; return copy; };
+function grantAssignment(args) {
+  return args.find(arg => arg.startsWith(CAPABILITY_GRANT_ENV + "="));
+}
+
+test("capability grants round-trip literal bounded values without normalization", () => {
+  const value = capabilityGrant();
+  assert.deepEqual(parseCapabilityGrant(value), value);
+  assert.deepEqual(decodeCapabilityGrant(encodeCapabilityGrant(value)), value);
+  const boundary = { tools: ["t".repeat(MAX_CAPABILITY_TOOL_LENGTH)], readPaths: ["r".repeat(MAX_CAPABILITY_PATH_LENGTH)],
+    writePaths: [], delegation: { maxDepth: MAX_CAPABILITY_DELEGATION_DEPTH }, returnResults: false,
+    turns: MAX_CAPABILITY_TURNS, timeoutMs: MAX_CAPABILITY_TIMEOUT_MS };
+  assert.deepEqual(decodeCapabilityGrant(encodeCapabilityGrant(boundary)), boundary);
+  assert.deepEqual(parseCapabilityGrant({ ...capabilityGrant(), tools: [], readPaths: [], writePaths: [], delegation: { maxDepth: 0 },
+    turns: 1, timeoutMs: 1 }).delegation, { maxDepth: 0 });
+});
+
+test("capability grant schema rejects missing, unknown, duplicate, malformed and unbounded input", () => {
+  const value = capabilityGrant();
+  const invalid = [null, [], withoutGrantField(value, "tools"), withoutGrantField(value, "readPaths"),
+    withoutGrantField(value, "writePaths"), withoutGrantField(value, "delegation"), withoutGrantField(value, "returnResults"),
+    withoutGrantField(value, "turns"), withoutGrantField(value, "timeoutMs"), { ...value, extra: true },
+    { ...value, tools: "read" }, { ...value, tools: ["read", "read"] }, { ...value, tools: [""] },
+    { ...value, tools: ["bad tool"] }, { ...value, tools: ["t".repeat(MAX_CAPABILITY_TOOL_LENGTH + 1)] },
+    { ...value, tools: Array.from({ length: MAX_CAPABILITY_TOOLS + 1 }, (_, i) => "tool" + i) },
+    { ...value, readPaths: ["/same", "/same"] }, { ...value, readPaths: ["relative\0path"] },
+    { ...value, readPaths: ["p".repeat(MAX_CAPABILITY_PATH_LENGTH + 1)] },
+    { ...value, writePaths: Array.from({ length: MAX_CAPABILITY_PATHS + 1 }, (_, i) => "/p" + i) },
+    { ...value, delegation: { maxDepth: -1 } }, { ...value, delegation: { maxDepth: MAX_CAPABILITY_DELEGATION_DEPTH + 1 } },
+    { ...value, delegation: { maxDepth: 1.5 } }, { ...value, delegation: { maxDepth: 1, extra: true } },
+    { ...value, returnResults: 1 }, { ...value, turns: 0 }, { ...value, turns: MAX_CAPABILITY_TURNS + 1 },
+    { ...value, turns: 1.5 }, { ...value, timeoutMs: 0 }, { ...value, timeoutMs: MAX_CAPABILITY_TIMEOUT_MS + 1 },
+    { ...value, timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
+    { ...value, readPaths: Array.from({ length: 5 }, (_, i) => i + "p".repeat(MAX_CAPABILITY_PATH_LENGTH)) }];
+  for (const candidate of invalid) assert.throws(() => parseCapabilityGrant(candidate));
+  for (const raw of ["", "not+canonical", "a".repeat(22_001), Buffer.from("{}").toString("base64url"),
+    Buffer.from(JSON.stringify({ ...value, extra: "secret" })).toString("base64url")])
+    assert.throws(() => decodeCapabilityGrant(raw), /Invalid capability grant bootstrap/);
+});
+
+test("launcher propagates only the literal grant and never inherits it into a later launch", async t => {
+  const a = await active(t), launcher = setup(a), value = capabilityGrant();
+  await launcher.launch("granted", { prompt: "Delegated task", related: true, grant: value }, a.root);
+  const granted = a.w.created[0], raw = grantAssignment(granted);
+  assert.ok(raw);
+  assert.deepEqual(decodeCapabilityGrant(raw.slice(raw.indexOf("=") + 1)), value);
+  const identityRaw = granted.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
+  assert.equal(decodeBootstrap(identityRaw.slice(identityRaw.indexOf("=") + 1)).grant, undefined,
+    "identity bootstrap remains grant-free");
+  assert.equal(JSON.stringify(a.entries).includes("readPaths"), false, "orientation entries never persist grants");
+  await launcher.launch("unganted-after-grant", { role: "review", prompt: JSON.stringify(value) }, a.root);
+  assert.equal(grantAssignment(a.w.created[1]), undefined, "roles, prompts, and prior launches cannot create or inherit grants");
+});
+
+test("no grant preserves the launch command and malformed grants fail before native creation", async t => {
+  const a = await active(t), launcher = setup(a);
+  await launcher.launch("default", {}, a.root);
+  assert.equal(grantAssignment(a.w.created[0]), undefined);
+  assert.ok(a.w.created[0].some(arg => arg.startsWith(BOOTSTRAP_ENV + "=")));
+  const before = a.w.created.length;
+  for (const [index, invalid] of [{ ...capabilityGrant(), turns: 0 }, { ...capabilityGrant(), writePaths: ["/x", "/x"] },
+    { ...capabilityGrant(), delegation: { maxDepth: 99 } }, { ...capabilityGrant(), unknown: true }].entries())
+    await assert.rejects(launcher.launch("invalid-grant-" + index, { grant: invalid }, a.root));
+  assert.equal(a.w.created.length, before);
+});
+
+test("grants are rejected for unrelated launches before native creation", async t => {
+  const a = await active(t), launcher = setup(a), value = capabilityGrant();
+  for (const [index, options] of [{ grant: value }, { related: false, grant: value }].entries())
+    await assert.rejects(launcher.launch("unrelated-grant-" + index, options, a.root), /grant requires a related launch/);
+  assert.equal(a.w.created.length, 0);
+});
+
 test("placement is task-aware; explicit placement always wins", () => {
   assert.equal(placementFor({}, false), "session");
   assert.equal(placementFor({ related: true }, false), "right");

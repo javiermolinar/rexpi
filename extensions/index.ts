@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { executable } from "../lib/executable.ts";
-import { Launcher, type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
+import { CAPABILITY_GRANT_ENV, decodeCapabilityGrant, Launcher, MAX_CAPABILITY_DELEGATION_DEPTH,
+  MAX_CAPABILITY_PATH_LENGTH, MAX_CAPABILITY_PATHS, MAX_CAPABILITY_TIMEOUT_MS, MAX_CAPABILITY_TOOL_LENGTH,
+  MAX_CAPABILITY_TOOLS, MAX_CAPABILITY_TURNS, type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
+import { CapabilityRuntime } from "../lib/capability-runtime.ts";
+import { registerCapabilityPathTools } from "../lib/capability-paths.ts";
 import { OutcomeCache } from "../lib/outcome-cache.ts";
 import { Rex } from "../lib/rex.ts";
 import { requireFeature, Runtime } from "../lib/runtime.ts";
@@ -28,6 +32,20 @@ import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap, type AgentHandle } from "../
 import { registerAgentTools } from "./agent.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 
+const capabilityPaths = () => Type.Array(Type.String({ minLength: 1, maxLength: MAX_CAPABILITY_PATH_LENGTH }),
+  { maxItems: MAX_CAPABILITY_PATHS, uniqueItems: true });
+const capabilityGrant = Type.Object({
+  tools: Type.Array(Type.String({ minLength: 1, maxLength: MAX_CAPABILITY_TOOL_LENGTH,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }), { maxItems: MAX_CAPABILITY_TOOLS, uniqueItems: true }),
+  readPaths: capabilityPaths(),
+  writePaths: capabilityPaths(),
+  delegation: Type.Object({ maxDepth: Type.Integer({ minimum: 0, maximum: MAX_CAPABILITY_DELEGATION_DEPTH }) },
+    { additionalProperties: false }),
+  returnResults: Type.Boolean(),
+  turns: Type.Integer({ minimum: 1, maximum: MAX_CAPABILITY_TURNS }),
+  timeoutMs: Type.Integer({ minimum: 1, maximum: MAX_CAPABILITY_TIMEOUT_MS }),
+}, { additionalProperties: false });
+
 const schema = Type.Object({
   prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Optional task; omit for an empty chat." })),
   cwd: Type.Optional(Type.String({ description: "Existing local directory; absolute, relative or ~/…; cannot combine with project." })),
@@ -43,6 +61,7 @@ const schema = Type.Object({
   provider: Type.Optional(Type.String({ description: "Requires model; omit both for child's defaults." })),
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(literalUnion(THINKING)),
+  grant: Type.Optional(capabilityGrant),
 }, { additionalProperties: false });
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -71,6 +90,9 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const agents = registerAgentsCommand(pi, () => runtime);
   let launcher: Launcher | undefined;
   let messaging: MessagingRuntime | undefined;
+  let capability: CapabilityRuntime | undefined;
+  let capabilityContext: ExtensionContext | undefined;
+  let capabilityFailure: string | undefined;
   let peer: PeerRuntime | undefined;
   const agentRuntime = new AgentRuntime();
   observeMessaging(pi, () => messaging);
@@ -90,6 +112,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const extension = fileURLToPath(import.meta.url);
   const stop = () => {
     activation++; agents.cancel(); worktrees.cancel();
+    capability?.revoke(); capabilityContext = undefined;
     messaging?.detach(); messaging = undefined;
     agentRuntime.detach();
     peer?.detach(); peer = undefined;
@@ -108,13 +131,28 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (allowBootstrap && !consumed) {
         consumed = true;
         const raw = process.env[BOOTSTRAP_ENV], rawAgent = process.env[AGENT_BOOTSTRAP_ENV];
-        delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV];
+        const rawGrant = process.env[CAPABILITY_GRANT_ENV];
+        delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV]; delete process.env[CAPABILITY_GRANT_ENV];
         if (raw) seed = decodeBootstrap(raw);
         if (rawAgent) {
           if (!seed) throw new Error("Agent handle bootstrap requires a related launch bootstrap");
           agentSeed = decodeAgentBootstrap(rawAgent);
           if (agentSeed.taskId !== seed.taskId || agentSeed.conversationId !== seed.conversationId)
             throw new Error("Agent handle bootstrap does not match the decoded child seed");
+        }
+        if (rawGrant !== undefined) {
+          capabilityFailure = "Capability grant bootstrap was rejected; all tool authority is denied";
+          if (!seed) throw new Error("Capability grant bootstrap requires a launch bootstrap");
+          if (!seed.origin || seed.taskId !== seed.origin.taskId)
+            throw new Error("Capability grant bootstrap requires a related launch");
+          // Consume and validate launch metadata once. Do not expose it to orientation or restored entries.
+          // The sole whole-grant timer starts here, before any asynchronous startup work.
+          capabilityContext = ctx;
+          capability = new CapabilityRuntime(decodeCapabilityGrant(rawGrant), { onNotice: message => {
+            if (capabilityContext?.hasUI) capabilityContext.ui.notify(message, "warning");
+          } });
+          capability.attachContext(ctx);
+          capabilityFailure = undefined;
         }
       }
       if (ctx.mode !== "tui" || !rexId(process.env.REX_BLOCK, "block") || !rexId(process.env.REX_SESSION, "session")) return;
@@ -180,29 +218,42 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       }
       if (!registered) {
         registered = true;
-        pi.registerTool({
+        const grantRuntime = capability;
+        let toolApi = pi;
+        if (grantRuntime) {
+          // Only whitelisted built-ins are replaced; their operations recheck this exact incarnation.
+          registerCapabilityPathTools(pi, ctx.cwd, grantRuntime);
+          toolApi = Object.create(pi) as ExtensionAPI;
+          toolApi.registerTool = ((definition: Parameters<ExtensionAPI["registerTool"]>[0]) => {
+            if (grantRuntime.allowsTool(definition.name)) pi.registerTool(definition);
+          }) as ExtensionAPI["registerTool"];
+        }
+        toolApi.registerTool({
           name: "rex_start_pi", label: "Start Pi in Rex",
           description: "Start fresh Pi in a new Rex session, split, or tab. Accepts a project path/zoxide query or cwd; honor requested placement. Parent navigation, no history transfer.",
           executionMode: "sequential", parameters: schema,
           async execute(id, params, signal, _update, toolCtx) {
             const sourceLauncher = launcher, sourceRuntime = runtime, sourceMessaging = messaging;
-            // Capture this generation: deferred work must not acquire a replacement runtime.
+            const sourceCapability = capability;
+            // Capture this generation: deferred work must not acquire a replacement runtime or grant.
             const result = await launchCalls.run(id, () => {
+              const requested = params as LaunchOptions;
+              const delegated = sourceCapability ? sourceCapability.deriveChildOptions(requested) : requested;
               if (!sourceLauncher || !sourceRuntime) throw new Error("Rexpi is not active in a verified Rex terminal");
               if (sourceRuntime.snapshot().state.piSessionId !== toolCtx.sessionManager.getSessionId()) throw new Error("Pi source conversation changed");
               sourceMessaging?.observeRun(toolCtx);
-              return sourceLauncher.launch(id, params as LaunchOptions, toolCtx.cwd, signal);
+              return sourceLauncher.launch(id, delegated, toolCtx.cwd, sourceCapability?.toolSignal(signal) ?? signal);
             });
             return { content: [{ type: "text", text: launchText(result) }], details: result };
           },
         });
-        registerMessageSend(pi, () => messaging);
-        registerMessagingControls(pi, () => ({ runtime, messaging }));
-        registerConversationTools(pi, () => ({ runtime, messaging }));
-        registerPeerTools(pi, () => ({ runtime, peer }));
-        registerAgentTools(pi, () => ({ runtime, peer, agent: agentRuntime }));
-        registerTerminalFeatures(pi, () => ({ runtime, terminal }), ctx);
-        registerSessionTool(pi, () => ({ runtime, sessions }));
+        registerMessageSend(toolApi, () => messaging);
+        registerMessagingControls(toolApi, () => ({ runtime, messaging }));
+        registerConversationTools(toolApi, () => ({ runtime, messaging }));
+        registerPeerTools(toolApi, () => ({ runtime, peer }));
+        registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime }));
+        registerTerminalFeatures(toolApi, () => ({ runtime, terminal }), ctx);
+        registerSessionTool(toolApi, () => ({ runtime, sessions }));
       }
     } catch (error) {
       if (generation !== activation) return;
@@ -213,6 +264,12 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   pi.on("session_start", (_event, ctx) => initialize(ctx, true));
   pi.on("session_tree", (_event, ctx) => initialize(ctx, false));
   pi.on("session_shutdown", stop);
+  pi.on("tool_call", (event, ctx) => capability?.guardTool(event.toolName, event.input, ctx)
+    ?? (capabilityFailure ? { block: true as const, reason: capabilityFailure } : undefined));
+  pi.on("turn_start", (_event, ctx) => {
+    if (capability) capability.startTurn(ctx);
+    else if (capabilityFailure) ctx.abort();
+  });
   pi.on("agent_start", (_event, ctx) => {
     try { peer?.observeAgentStart(ctx); } catch { /* stale or unverified contexts provide no evidence */ }
   });
@@ -242,6 +299,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
     description: "Start a fresh Pi conversation in a Rex " + placement + ": /" + name + " [task]",
     handler: async (args, ctx) => {
       try {
+        if (capability || capabilityFailure) throw new Error("Pi launch commands are unavailable in a capability-granted runtime");
         if (!launcher) throw new Error("No verified Rexpi conversation");
         const result = await launcher.launch(randomUUID(), { placement, ...(args.trim() ? { prompt: args.trim() } : {}) }, ctx.cwd);
         ctx.ui.notify(launchText(result), result.startup.state === "bound" && !result.warning ? "info" : "warning");
