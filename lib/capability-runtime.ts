@@ -177,7 +177,12 @@ export class CapabilityRuntime {
   /** Called at Pi's actual turn_start boundary, not at agent_start or message construction. */
   startTurn(context: CapabilityContext): boolean {
     this.attachContext(context);
-    if (!this.ensureActive()) return false;
+    const wasActive = this.state === "active";
+    if (!this.ensureActive()) {
+      // ensureActive aborts a newly expired context; already inactive incarnations need it too.
+      if (!wasActive) this.abortCurrent();
+      return false;
+    }
     if (this.turnsStarted >= this.grant.turns) {
       this.turnLimitDenied = true;
       this.abortCurrent();

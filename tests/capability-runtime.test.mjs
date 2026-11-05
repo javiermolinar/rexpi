@@ -190,6 +190,22 @@ test("tool and turn boundaries expire even when the timer callback is delayed", 
   assert.match(capability.guardTool("read", {}).reason, /expired/);
 });
 
+test("already expired and revoked runtimes abort every later turn context", t => {
+  const clock = fakeClock(); clock.elapse(2000);
+  const expired = new CapabilityRuntime(grant(), { clock, deadlineAt: 1000 });
+  t.after(() => expired.revoke());
+  const first = context(), second = context();
+  assert.equal(expired.startTurn(first), false);
+  assert.equal(expired.startTurn(second), false);
+  assert.equal(first.aborts, 1);
+  assert.equal(second.aborts, 1);
+  assert.match(expired.guardTool("read", {}).reason, /expired/);
+  const active = runtime(t), revoked = context();
+  active.capability.revoke();
+  assert.equal(active.capability.startTurn(revoked), false);
+  assert.equal(revoked.aborts, 1);
+});
+
 test("revocation clears the only timer and permanently denies the old incarnation", t => {
   const { capability, clock, notices } = runtime(t);
   const ctx = context();

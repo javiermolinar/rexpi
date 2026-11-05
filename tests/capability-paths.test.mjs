@@ -220,32 +220,42 @@ test("a post-creation denial removes only coordinator-created files and parents"
   assert.equal(await fs.readdir(root).then(entries => entries.length), 0);
 });
 
-test("a new-file stat failure still cleans the file and coordinator-created parents", async t => {
-  const root = await sandbox(t), target = join(root, "new/deep/file");
+test("unknown new-file identity preserves replacements and reports incomplete cleanup", async t => {
+  const root = await sandbox(t), target = join(root, "new/deep/file"), moved = join(root, "moved-original");
   const injected = { ...pathFs, open: async (path, flags, mode) => {
     const handle = await fs.open(path, flags, mode);
-    if (path === target) handle.stat = async () => { throw new Error("injected post-create stat failure"); };
+    if (path === target) {
+      await fs.rename(target, moved);
+      await fs.writeFile(target, "external replacement");
+      handle.stat = async () => { throw new Error("injected post-create stat failure"); };
+    }
     return handle;
   } };
   const { tools: map } = await tools(root, pathRuntime(root), injected);
-  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /stat failure/);
-  assert.equal(existsSync(join(root, "new")), false);
-  assert.deepEqual(await fs.readdir(root), []);
+  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /cleanup was incomplete/);
+  assert.equal(await fs.readFile(target, "utf8"), "external replacement");
+  assert.equal(existsSync(moved), true, "unknown original is preserved rather than retargeted");
 });
 
-test("a post-mkdir lstat failure still removes coordinator-created parents", async t => {
-  const root = await sandbox(t), deep = join(root, "new/deep");
+test("unknown parent identity preserves replacement directories and reports incomplete cleanup", async t => {
+  const root = await sandbox(t), deep = join(root, "new/deep"), moved = join(root, "moved-deep");
   let fail = false;
   const injected = { ...pathFs,
     mkdir: async (path, options) => { await fs.mkdir(path, options); if (path === deep) fail = true; },
     lstat: async path => {
-      if (path === deep && fail) { fail = false; throw new Error("injected post-mkdir lstat failure"); }
+      if (path === deep && fail) {
+        fail = false;
+        await fs.rename(deep, moved);
+        await fs.mkdir(deep);
+        await fs.writeFile(join(deep, "owned"), "external replacement");
+        throw new Error("injected post-mkdir lstat failure");
+      }
       return fs.lstat(path);
     } };
   const { tools: map } = await tools(root, pathRuntime(root), injected);
-  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /lstat failure/);
-  assert.equal(existsSync(join(root, "new")), false);
-  assert.deepEqual(await fs.readdir(root), []);
+  await assert.rejects(execute(map.get("write"), { path: "new/deep/file", content: "no effects" }), /cleanup was incomplete/);
+  assert.equal(await fs.readFile(join(deep, "owned"), "utf8"), "external replacement");
+  assert.equal(existsSync(moved), true);
 });
 
 test("edit uses one descriptor, requires both grants, and truncates old suffixes", async t => {

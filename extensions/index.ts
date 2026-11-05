@@ -134,6 +134,9 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         const rawGrant = process.env[CAPABILITY_GRANT_ENV], rawDeadline = process.env[CAPABILITY_DEADLINE_ENV];
         delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV]; delete process.env[CAPABILITY_GRANT_ENV];
         delete process.env[CAPABILITY_DEADLINE_ENV];
+        // Any grant-shaped envelope fails closed before earlier identity metadata can disarm the guards.
+        if (rawGrant !== undefined || rawDeadline !== undefined)
+          capabilityFailure = "Capability grant bootstrap was rejected; all tool authority is denied";
         if (raw) seed = decodeBootstrap(raw);
         if (rawAgent) {
           if (!seed) throw new Error("Agent handle bootstrap requires a related launch bootstrap");
@@ -142,7 +145,6 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
             throw new Error("Agent handle bootstrap does not match the decoded child seed");
         }
         if (rawGrant !== undefined || rawDeadline !== undefined) {
-          capabilityFailure = "Capability grant bootstrap was rejected; all tool authority is denied";
           if (!seed) throw new Error("Capability grant bootstrap requires a launch bootstrap");
           if (!seed.origin || seed.taskId !== seed.origin.taskId)
             throw new Error("Capability grant bootstrap requires a related launch");

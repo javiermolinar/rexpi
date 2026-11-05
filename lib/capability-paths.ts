@@ -411,16 +411,24 @@ export class CapabilityPathCoordinator {
   private async cleanup(state: CallState): Promise<unknown> {
     let failure: unknown;
     for (const created of state.createdFiles.reverse()) {
+      if (!created.identity) {
+        failure ??= new Error("Created file identity is unknown; cleanup refused to unlink a possible replacement: " + created.path);
+        continue;
+      }
       try {
         const stat = await this.fs.lstat(created.path);
         if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1
-            && (!created.identity || sameIdentity(identity(stat), created.identity))) await this.fs.unlink(created.path);
+            && sameIdentity(identity(stat), created.identity)) await this.fs.unlink(created.path);
       } catch (error) { if (!missing(error)) failure ??= error; }
     }
     for (const created of state.createdDirectories.reverse()) {
+      if (!created.identity) {
+        failure ??= new Error("Created directory identity is unknown; cleanup refused to remove a possible replacement: " + created.path);
+        continue;
+      }
       try {
         const stat = await this.fs.lstat(created.path);
-        if (stat.isDirectory() && !stat.isSymbolicLink() && (!created.identity || sameIdentity(identity(stat), created.identity)))
+        if (stat.isDirectory() && !stat.isSymbolicLink() && sameIdentity(identity(stat), created.identity))
           await this.fs.rmdir(created.path);
       } catch (error) { if (!missing(error)) failure ??= error; }
     }

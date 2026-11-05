@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fail closed when any grant-shaped bootstrap has malformed identity/agent metadata, abort later turns for already expired or revoked runtimes, and preserve uncertain replacement paths with explicit incomplete-cleanup errors when created-inode identity is unavailable.
 - Anchor delegated relative path grants to the parent cwd, propagate absolute parent deadlines through one-shot metadata, check deadlines at tool/turn boundaries even with delayed timers, strictly validate conversation response metadata and measured byte bounds, and register newly created paths for cleanup before fallible identity checks.
 - Add one-shot related-launch capability grants for literal tool whitelists, attenuated delegation, result return, model turns, whole-incarnation timeouts, and authorized read/write/edit paths. Grants are in memory, revoked on replacement, and preserve ungranted launch compatibility.
 - Add canonical path containment, no-follow and replacement fences, descriptor-based file I/O, hardlink-write denial, and missing-parent cleanup. Document the residual non-atomic ancestor-lookup limitation and that explicitly granted shell tools are not OS-sandboxed.

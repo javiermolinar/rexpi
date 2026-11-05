@@ -279,6 +279,18 @@ test("malformed child grant input is consumed and fails closed", async t => {
   assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx).block, true);
 });
 
+test("malformed identity metadata cannot disarm a grant-shaped bootstrap", async t => {
+  const value = enforcementGrant({ tools: ["read"] });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: "invalid", PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(process.env[CAPABILITY_GRANT_ENV], undefined);
+  assert.equal(f.tools.size, 0);
+  assert.equal(f.events.get("tool_call")({ toolName: "bash", input: {} }, f.ctx).block, true);
+  let aborts = 0;
+  f.events.get("turn_start")({}, { ...f.ctx, abort: () => { aborts++; } });
+  assert.equal(aborts, 1);
+});
+
 test("a stray or malformed deadline envelope is consumed and fails closed", async t => {
   const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
   const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
