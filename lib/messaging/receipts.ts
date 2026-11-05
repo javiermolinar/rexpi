@@ -8,7 +8,9 @@ import { decodeEnvelope, digest, endpoint, sameEndpoint, MAX_BATCH, MAX_BATCH_BY
 
 export const FOLLOWUP_INTENT = "pi-rex.message.followup.intent";
 export const FOLLOWUP_CONTEXT = "pi-rex.message.followup";
-export interface Receipt { logicalId: string; digest: string; requestId: string }
+export interface Receipt {
+  logicalId: string; digest: string; requestId: string; runId: string; inReplyTo: string | null; runtimeId: string;
+}
 export interface FollowupBatch { version: 1; owner: Endpoint; nonce: string; receipts: Receipt[] }
 type IndexedReceipt = Receipt & { state: "reserved" | "inserted" };
 export type ReceiptIndex = Map<string, IndexedReceipt[]>;
@@ -114,9 +116,15 @@ function batch(value: unknown): FollowupBatch {
     throw new Error("Invalid follow-up record");
   const receipts = v.receipts.map(raw => {
     const r = record(raw);
+    const fields = ["logicalId", "digest", "requestId", "runId", "inReplyTo", "runtimeId"];
+    if (Object.keys(r).length !== fields.length || fields.some(key => !Object.hasOwn(r, key)))
+      throw new Error("Unexpected or missing follow-up receipt fields");
     if (!uuid(r.logicalId) || typeof r.digest !== "string" || !/^[a-f0-9]{64}$/.test(r.digest)
-        || typeof r.requestId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(r.requestId)) throw new Error("Invalid follow-up receipt");
-    return { logicalId: r.logicalId, digest: r.digest, requestId: r.requestId };
+        || typeof r.requestId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(r.requestId)
+        || !uuid(r.runId) || !uuid(r.runtimeId) || (r.inReplyTo !== null && !uuid(r.inReplyTo)))
+      throw new Error("Invalid follow-up receipt");
+    return { logicalId: r.logicalId, digest: r.digest, requestId: r.requestId, runId: r.runId,
+      inReplyTo: r.inReplyTo as string | null, runtimeId: r.runtimeId };
   });
   if (new Set(receipts.map(r => r.logicalId)).size !== receipts.length) throw new Error("Duplicate follow-up receipts");
   return { version: 1, owner, nonce: v.nonce, receipts };
@@ -170,7 +178,8 @@ export class ReceiptLedger {
       status = "reserved";
     }
     for (const r of index.get(envelope.id) ?? []) {
-      if (r.digest !== content || r.requestId !== envelope.requestId) return "conflict";
+      if (r.digest !== content || r.requestId !== envelope.requestId || r.runId !== envelope.runId
+          || r.inReplyTo !== envelope.inReplyTo || r.runtimeId !== envelope.runtimeId) return "conflict";
       if (r.state === "inserted") status = "inserted";
       else if (status !== "inserted") status = "reserved";
     }
@@ -223,7 +232,8 @@ export class ReceiptLedger {
     try {
       await this.confirm(signal); this.guard(); signal?.throwIfAborted();
       const details: FollowupBatch = { version: 1, owner: this.owner, nonce: randomUUID(),
-        receipts: items.map(e => ({ logicalId: e.id, digest: contents.get(e.id)!, requestId: e.requestId })) };
+        receipts: items.map(e => ({ logicalId: e.id, digest: contents.get(e.id)!, requestId: e.requestId,
+          runId: e.runId, inReplyTo: e.inReplyTo, runtimeId: e.runtimeId })) };
       const encoded = JSON.stringify(details);
       this.append(FOLLOWUP_INTENT, details);
       const entries = this.history.getEntries().map(record).filter(e => e.type === "custom" && e.customType === FOLLOWUP_INTENT

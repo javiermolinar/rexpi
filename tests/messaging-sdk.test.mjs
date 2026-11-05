@@ -97,7 +97,8 @@ async function sdkFixture(t, hooks = {}) {
   f.w.blocks.set(child.blockId, { sessionId: f.w.source.sessionId, windowId: rid("window"), blockId: child.blockId });
   const ticket = await f.m.prepareReturn(); await f.m.registerReturn(ticket, child); await f.m.poll();
   const publish = text => {
-    const envelope = makeEnvelope(child, f.owner, ticket.requestId, "result", text, uuid());
+    const envelope = makeEnvelope(child, f.owner, ticket.requestId, "result", text, uuid(),
+      { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId });
     f.mailbox.publish(envelope); return envelope;
   };
   return { ...f, session, agent, api, ctx, calls, errors, lifecycle, requests, host, publish,
@@ -122,8 +123,8 @@ test("SDK: real extension sendMessage starts one idle AgentSession run for a per
 
 test("SDK integration: fixture-launched child crosses process, transport, durable intent and real extension follow-up API", { timeout: 15000 }, async t => {
   const f = await sdkFixture(t), child = await f.launch("sdk-child");
-  const result = await child.request("send", { params: { to: f.owner, requestId: child.requestId,
-    kind: "result", text: "cross-process SDK evidence", id: uuid() } });
+  const result = await child.request("send", { params: { to: f.owner, requestId: child.requestId, runId: child.runId,
+    runtimeId: child.runtimeId, inReplyTo: child.inReplyTo, kind: "result", text: "cross-process SDK evidence", id: uuid() } });
   assert.equal(result.state, "queued");
   await f.m.poll(); await f.idle();
   assert.equal(f.calls.length, 1); assert.equal(followups(f).length, 1); assert.equal(f.requests.length, 1);

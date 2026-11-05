@@ -44,8 +44,8 @@ async function pair(t, related = true, hooks = {}) {
   const child = await start(rid("block"), seed);
   return { root, w, store, parent, child, start };
 }
-const sendInput = (extra = {}) => ({ id: uuid(), requestId: "peer-task", kind: "question", text: "Review this finding",
-  delivery: "followUp", triggerTurn: true, ...extra });
+const sendInput = (extra = {}) => ({ id: uuid(), requestId: "peer-task", runId: uuid(), runtimeId: uuid(),
+  inReplyTo: null, kind: "question", text: "Review this finding", delivery: "followUp", triggerTurn: true, ...extra });
 
 test("real endpoint pages active in-memory history without model work", async t => {
   const f = await pair(t), ids = [];
@@ -221,6 +221,11 @@ test("peer sends preserve attribution and explicit delivery, deduplicate, and ne
   const f = await pair(t), input = sendInput();
   const first = await f.parent.peer.send(f.child.endpoint.conversationId, input);
   assert.equal(first.state, "accepted"); assert.equal(first.processingConfirmed, false); assert.equal(first.completionConfirmed, false);
+  assert.equal(first.messageId, input.id); assert.equal(first.requestId, input.requestId);
+  assert.equal(first.runId, input.runId); assert.equal(first.runtimeId, input.runtimeId); assert.equal(first.inReplyTo, null);
+  assert.equal(first.deliveryEvidence.state, "accepted"); assert.equal(first.deliveryEvidence.acceptance, "accepted");
+  assert.equal(first.deliveryEvidence.delivery, "unknown"); assert.equal(first.deliveryEvidence.processing, "unknown");
+  assert.equal(first.deliveryEvidence.settlement, "unknown");
   assert.deepEqual(await f.parent.peer.send(f.child.endpoint.conversationId, input), first);
   assert.equal(f.child.sent.length, 1);
   const { message, options } = f.child.sent[0];
@@ -230,6 +235,15 @@ test("peer sends preserve attribution and explicit delivery, deduplicate, and ne
   assert.ok(message.content.includes(f.parent.endpoint.conversationId));
   assert.equal(message.details.envelope.from.token, f.parent.endpoint.token);
   assert.equal(message.details.delivery, "followUp");
+  assert.equal(message.details.envelope.messageId, input.id); assert.equal(message.details.envelope.runId, input.runId);
+  assert.equal(message.details.envelope.runtimeId, input.runtimeId);
+  await assert.rejects(f.parent.peer.send(f.child.endpoint.conversationId, { ...input, runId: uuid() }), /Conflicting peer request ID/);
+  assert.equal(f.child.sent.length, 1, "a conflicting logical retry has no second native effect");
+  assert.equal(f.parent.peer.messageDelivery(input.id).state, "accepted", "conflict/unknown cannot retract acceptance");
+  assert.equal(f.child.peer.messageDelivery(input.id).delivery, "unknown");
+  f.child.peer.observeAgentStart(f.child.ctx); f.child.peer.observeAgentEnd(f.child.ctx);
+  assert.equal(f.child.peer.messageDelivery(input.id).processing, "unknown");
+  assert.equal(f.child.peer.messageDelivery(input.id).settlement, "unknown");
   await f.parent.peer.send(f.child.endpoint.conversationId, sendInput({ delivery: "steer", triggerTurn: false }));
   assert.deepEqual(f.child.sent[1].options, { triggerTurn: false, deliverAs: "steer" });
 });
@@ -369,6 +383,9 @@ test("a lost response after custom-message insertion reports and deduplicates an
   const first = await sender.execute("unknown", params, undefined, undefined, f.parent.ctx)
     .then(() => assert.fail("Lost response must not report acceptance"), error => error);
   assert.match(first.message, /outcome may be unknown/i);
+  assert.equal(f.parent.peer.messageDelivery(params.id).state, "unknown");
+  assert.equal(f.parent.peer.messageDelivery(params.id).acceptance, "unknown");
+  assert.equal(f.parent.peer.messageDelivery(params.id).delivery, "unknown");
   await assert.rejects(sender.execute("unknown-inspection", params, undefined, undefined, f.parent.ctx), error => error === first);
   assert.equal(f.child.sent.length, 1);
 });
@@ -379,8 +396,11 @@ test("target replacement after acceptance reports unknown without retracting the
     if (block === f.child.blockId && method === "process" && ++checks === 2)
       f.w.processPids.set(f.child.blockId, process.pid + 1);
   };
-  await assert.rejects(f.parent.peer.send(f.child.endpoint.conversationId, sendInput()), /outcome may be unknown/i);
+  const input = sendInput();
+  await assert.rejects(f.parent.peer.send(f.child.endpoint.conversationId, input), /outcome may be unknown/i);
   assert.equal(f.child.sent.length, 1);
+  assert.equal(f.parent.peer.messageDelivery(input.id).state, "unknown");
+  assert.equal(f.parent.peer.messageDelivery(input.id).delivery, "unknown");
 });
 
 test("source detachment during native verification fences an unsent request", async t => {
@@ -388,10 +408,12 @@ test("source detachment during native verification fences an unsent request", as
   const entered = new Promise(resolve => { f.w.onTerminalData = async block => {
     if (block === f.child.blockId) { resolve(); await new Promise(done => { release = done; }); }
   }; });
-  const pending = f.parent.peer.send(f.child.endpoint.conversationId, sendInput());
+  const input = sendInput(), pending = f.parent.peer.send(f.child.endpoint.conversationId, input);
   await entered; f.parent.peer.detach(); release();
   await assert.rejects(pending, /session|conversation|aborted|changed/i);
   assert.equal(f.child.sent.length, 0);
+  assert.equal(f.parent.peer.messageDelivery(input.id).state, "unknown");
+  assert.equal(f.parent.peer.messageDelivery(input.id).observations.length, 0, "pre-write failure is not post-write uncertainty");
 });
 
 function peerSocketPath(f, endpoint) {
@@ -494,15 +516,19 @@ async function sdkPair(t, hooks = {}) {
   await session.bindExtensions({ mode: "tui", onError: error => errors.push(error),
     uiContext: { getEditorText: () => "", notify() {}, setStatus() {} } });
   t.after(() => { peer?.detach(); session.dispose(); });
-  return { ...f, session, requests, errors, lifecycle };
+  return { ...f, session, requests, errors, lifecycle, get sdkPeer() { return peer; } };
 }
 
 const customPeerMessages = f => f.session.messages.filter(message => message.customType === PEER_MESSAGE_TYPE);
 
 test("SDK: idle followUp injects a custom message and starts one turn without input hooks", async t => {
   const f = await sdkPair(t), text = "SDK peer followUp 💩";
-  await f.parent.peer.send(f.child.endpoint.conversationId, sendInput({ text, delivery: "followUp", triggerTurn: true }));
+  const sent = await f.parent.peer.send(f.child.endpoint.conversationId, sendInput({ text, delivery: "followUp", triggerTurn: true }));
   await f.session.waitForIdle();
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).state, "accepted");
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).delivery, "unknown");
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).processing, "unknown");
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).settlement, "unknown");
   assert.equal(f.requests.length, 1); assert.equal(customPeerMessages(f).length, 1);
   assert.equal(customPeerMessages(f)[0].role, "custom");
   assert.match(JSON.stringify(f.requests[0]), /SDK peer followUp/);
@@ -534,8 +560,12 @@ test("SDK: busy followUp waits for the active run and then starts its own turn",
   const started = new Promise(resolve => { entered = resolve; });
   const f = await sdkPair(t, { stream: async n => { if (n === 0) { entered(); await new Promise(resolve => { release = resolve; }); } } });
   const running = f.session.prompt("human request"); await started;
-  await f.parent.peer.send(f.child.endpoint.conversationId, sendInput({ text: "Queued peer followUp", delivery: "followUp", triggerTurn: true }));
+  const sent = await f.parent.peer.send(f.child.endpoint.conversationId,
+    sendInput({ text: "Queued peer followUp", delivery: "followUp", triggerTurn: true }));
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).delivery, "unknown", "queued busy followUp is not target-delivered");
   release(); await running; await f.session.waitForIdle();
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).processing, "unknown", "a later turn is not correlated processing evidence");
+  assert.equal(f.sdkPeer.messageDelivery(sent.id).settlement, "unknown");
   assert.equal(f.requests.length, 2); assert.equal(customPeerMessages(f).length, 1);
   assert.match(JSON.stringify(f.requests[1]), /Queued peer followUp/); assert.deepEqual(f.errors, []);
 });

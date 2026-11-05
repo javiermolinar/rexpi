@@ -207,11 +207,21 @@ export class CapabilityRuntime {
     if (toolName === "rex_message_send" && !this.grant.returnResults
         && typeof input === "object" && input !== null && (input as { kind?: unknown }).kind === "result")
       return blocked("Capability grant denied: returnResults=false blocks kind=result");
-    if (toolName === "rex_start_pi") {
+    if (toolName === "rex_start_pi" || toolName === "rex_delegate") {
       const child = typeof input === "object" && input !== null
         ? (input as { grant?: unknown }).grant : undefined;
       try { this.deriveChildGrant(child); }
       catch (error) { return blocked(error instanceof Error ? error.message : "Capability delegation denied"); }
+    }
+    if (toolName === "rex_fanout") {
+      const children = typeof input === "object" && input !== null
+        ? (input as { children?: unknown }).children : undefined;
+      if (!Array.isArray(children) || !children.length || children.length > 64)
+        return blocked("Capability delegation denied: rex_fanout requires 1 to 64 explicit children");
+      try {
+        for (const child of children) this.deriveChildGrant(typeof child === "object" && child !== null
+          ? (child as { grant?: unknown }).grant : undefined);
+      } catch (error) { return blocked(error instanceof Error ? error.message : "Capability delegation denied"); }
     }
     return undefined;
   }

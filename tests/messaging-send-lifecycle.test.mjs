@@ -36,7 +36,8 @@ async function fixture(t) {
   const store = new BindingStore(join(root, "bindings")), owner = store.all().find(b => b.blockId === w.source.blockId);
   const peer = binding({ ...identity("review"), taskId: owner.taskId }); store.write(peer);
   w.blocks.set(peer.blockId, { sessionId: w.source.sessionId, windowId: rid("window"), blockId: peer.blockId });
-  const params = { to: endpointFromBinding(peer), requestId: "scoped-request", kind: "result", text: "same finding", id: uuid() };
+  const params = { to: endpointFromBinding(peer), requestId: "scoped-request", runId: uuid(), runtimeId: uuid(),
+    inReplyTo: uuid(), kind: "result", text: "same finding", id: uuid() };
   const inbox = join(root, "pi-rex", "messages", peer.serverInstance, peer.conversationId, "inbox");
   return { root, w, events, tools, commands, notices, sm, ctx, store, owner, peer, params, inbox,
     call: (id, input = params) => tools.get("rex_message_send").execute(id, input, undefined, undefined, ctx),
@@ -121,7 +122,8 @@ function cacheFixture(send) {
   const original = { observeRun() { observations++; }, send(params) { sends++; return send(params); } };
   current = original;
   registerMessageSend({ registerTool: value => { tool = value; } }, () => { gets++; return current; });
-  const params = { to: endpointFromBinding(binding(identity("main"))), requestId: "cache-test", kind: "result", text: "finding", id: uuid() };
+  const params = { to: endpointFromBinding(binding(identity("main"))), requestId: "cache-test", runId: uuid(),
+    runtimeId: uuid(), inReplyTo: uuid(), kind: "result", text: "finding", id: uuid() };
   return { params, setCurrent: value => { current = value; }, original,
     stats: () => ({ gets, observations, sends }),
     call: (id, input = params, signal) => tool.execute(id, input, signal, undefined, {}) };

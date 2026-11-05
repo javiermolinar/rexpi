@@ -92,7 +92,8 @@ export async function parentFixture(t, options = {}) {
     assert.equal(result.returnSetup.state, "registered");
     assert.equal(result.target.blockId, peer.ready.endpoint.blockId);
     await m.poll();
-    return { ...peer, result, command, endpoint: peer.ready.endpoint, requestId: result.returnSetup.requestId };
+    return { ...peer, result, command, endpoint: peer.ready.endpoint, requestId: result.returnSetup.requestId,
+      runId: result.returnSetup.runId, runtimeId: result.returnSetup.runtimeId, inReplyTo: result.returnSetup.messageId };
   };
   return f;
 }

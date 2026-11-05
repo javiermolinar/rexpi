@@ -7,6 +7,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { identity as parseIdentity, isLive, piSessionId as validPiSessionId, record, sameIdentity, uuid, type Identity } from "./state.ts";
 import type { Runtime, Snapshot } from "./runtime.ts";
 import { assertSameAgentRun, parseAgentHandle, type AgentHandle } from "./agent.ts";
+import { MessageDeliveryLedger, messageDeliveryEvidenceId, type MessageDeliverySnapshot } from "./messaging/delivery.ts";
 import { assertLiveEndpoint, contextText, endpoint, endpointFromBinding, makeEnvelope, sameEndpoint,
   KINDS, type Endpoint, type Kind } from "./messaging/protocol.ts";
 
@@ -28,7 +29,8 @@ export interface PeerReadInput {
   types?: string[]; textOnly?: boolean;
 }
 export interface PeerSendInput {
-  id: string; requestId: string; kind: Kind; text: string; delivery: Delivery; triggerTurn: boolean;
+  id: string; requestId: string; runId: string; runtimeId: string; inReplyTo?: string | null;
+  kind: Kind; text: string; delivery: Delivery; triggerTurn: boolean;
 }
 interface PeerRequest {
   type: typeof PROTOCOL; version: 1; id: string;
@@ -99,8 +101,10 @@ export interface PeerReadResult {
   activity: { idle: boolean; pendingMessages: boolean };
 }
 export interface PeerSendResult {
-  id: string; state: "accepted"; target: Identity; delivery: Delivery; triggerTurn: boolean;
+  id: string; messageId: string; requestId: string; runId: string; runtimeId: string; inReplyTo: string | null;
+  state: "accepted"; target: Identity; delivery: Delivery; triggerTurn: boolean;
   processingConfirmed: false; completionConfirmed: false;
+  deliveryEvidence: MessageDeliverySnapshot;
 }
 
 /** Internal evidence notification. Result-available evidence is deliberately not implemented. */
@@ -180,13 +184,16 @@ function readInput(value: unknown): PeerReadInput {
 }
 function sendInput(value: unknown): PeerSendInput {
   const v = record(value);
-  keys(v, ["id", "requestId", "kind", "text", "delivery", "triggerTurn"]);
+  keys(v, ["id", "requestId", "runId", "runtimeId", "kind", "text", "delivery", "triggerTurn",
+    ...(Object.hasOwn(v, "inReplyTo") ? ["inReplyTo"] : [])]);
   if (!uuid(v.id) || typeof v.requestId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(v.requestId)
+      || !uuid(v.runId) || !uuid(v.runtimeId) || (v.inReplyTo !== undefined && v.inReplyTo !== null && !uuid(v.inReplyTo))
       || typeof v.kind !== "string" || !KINDS.includes(v.kind as Kind)
       || typeof v.text !== "string" || !v.text.trim() || v.text.length > 32768
       || typeof v.delivery !== "string" || !DELIVERIES.includes(v.delivery as Delivery)
       || typeof v.triggerTurn !== "boolean") throw new Error("Invalid peer message parameters");
-  return { id: v.id, requestId: v.requestId, kind: v.kind as Kind, text: v.text,
+  return { id: v.id, requestId: v.requestId, runId: v.runId, runtimeId: v.runtimeId,
+    inReplyTo: (v.inReplyTo ?? null) as string | null, kind: v.kind as Kind, text: v.text,
     delivery: v.delivery as Delivery, triggerTurn: v.triggerTurn };
 }
 function agentActivityInput(value: unknown): Record<string, never> {
@@ -417,6 +424,7 @@ export class PeerRuntime {
   private socketStat?: { dev: number; ino: number };
   private sockets = new Set<Socket>();
   private requests = new Map<string, { digest: string; result: Promise<PeerResult> }>();
+  private readonly deliveries = new MessageDeliveryLedger();
   private resultProvider?: PeerAgentResultProvider;
   private cancelProvider?: PeerAgentCancelProvider;
   private stopProvider?: PeerAgentStopProvider;
@@ -430,6 +438,8 @@ export class PeerRuntime {
   setAgentResultProvider(provider?: PeerAgentResultProvider): void { this.resultProvider = provider; }
   setAgentCancelProvider(provider?: PeerAgentCancelProvider): void { this.cancelProvider = provider; }
   setAgentStopProvider(provider?: PeerAgentStopProvider): void { this.stopProvider = provider; }
+  /** Per-message evidence only; Pi conversation lifecycle cannot acknowledge a logical message. */
+  messageDelivery(messageId: string): MessageDeliverySnapshot { return this.deliveries.read(messageId); }
 
   async attach(ctx: ExtensionContext): Promise<void> {
     this.detach();
@@ -580,14 +590,25 @@ export class PeerRuntime {
         activity: { idle: ctx.isIdle(), pendingMessages: ctx.hasPendingMessages() } };
     }
     const input = request.params as PeerSendInput;
-    const envelope = makeEnvelope(request.from, request.to, input.requestId, input.kind, input.text, input.id);
+    const envelope = makeEnvelope(request.from, request.to, input.requestId, input.kind, input.text, input.id,
+      { runId: input.runId, runtimeId: input.runtimeId, inReplyTo: input.inReplyTo });
     // Final synchronous fence: no native await may separate ownership validation from the void SDK call.
-    this.guard(); signal.throwIfAborted();
-    this.pi.sendMessage({ customType: PEER_MESSAGE_TYPE, display: true,
-      details: { envelope, delivery: input.delivery, triggerTurn: input.triggerTurn }, content: contextText(envelope) },
-      { triggerTurn: input.triggerTurn, deliverAs: input.delivery });
-    return { id: input.id, state: "accepted", target: this.own!.state, delivery: input.delivery,
-      triggerTurn: input.triggerTurn, processingConfirmed: false, completionConfirmed: false };
+    this.guard(); signal.throwIfAborted(); this.deliveries.prepare(input.id);
+    try {
+      this.pi.sendMessage({ customType: PEER_MESSAGE_TYPE, display: true,
+        details: { envelope, delivery: input.delivery, triggerTurn: input.triggerTurn }, content: contextText(envelope) },
+        { triggerTurn: input.triggerTurn, deliverAs: input.delivery });
+    } catch (error) {
+      this.deliveries.observe({ messageId: input.id, evidenceId: messageDeliveryEvidenceId(input.id, "send-unknown"),
+        kind: "unknown", source: "send-unknown" });
+      throw error;
+    }
+    const deliveryEvidence = this.deliveries.observe({ messageId: input.id,
+      evidenceId: messageDeliveryEvidenceId(input.id, "peer-send-returned"), kind: "accepted", source: "peer-send-returned" });
+    return { id: input.id, messageId: input.id, requestId: input.requestId, runId: input.runId,
+      runtimeId: input.runtimeId, inReplyTo: input.inReplyTo ?? null, state: "accepted", target: this.own!.state,
+      delivery: input.delivery, triggerTurn: input.triggerTurn, processingConfirmed: false, completionConfirmed: false,
+      deliveryEvidence };
   }
   private async serve(socket: Socket): Promise<void> {
     this.sockets.add(socket);
@@ -652,7 +673,8 @@ export class PeerRuntime {
     if (op === "send") {
       const input = params as PeerSendInput;
       // Fail aggregate byte-limit violations before native preflight; the target validates again at dispatch.
-      makeEnvelope(from, to, input.requestId, input.kind, input.text, input.id);
+      makeEnvelope(from, to, input.requestId, input.kind, input.text, input.id,
+        { runId: input.runId, runtimeId: input.runtimeId, inReplyTo: input.inReplyTo });
     }
     const path = socketPath(this.stateDirectory, to), stat = lstatSync(path);
     if (!stat.isSocket() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) throw new Error("Unsafe or stale peer socket");
@@ -792,14 +814,30 @@ export class PeerRuntime {
     }
   }
   async send(target: string, input: PeerSendInput, signal?: AbortSignal): Promise<PeerSendResult> {
-    const checked = sendInput(input);
-    const result = await this.request(target, "send", checked, checked.id, signal) as PeerSendResult;
+    const checked = sendInput(input); this.deliveries.prepare(checked.id);
+    let result: PeerSendResult;
+    try { result = await this.request(target, "send", checked, checked.id, signal) as PeerSendResult; }
+    catch (error) {
+      if (error instanceof PeerSendUnknownError)
+        this.deliveries.observe({ messageId: checked.id, evidenceId: messageDeliveryEvidenceId(checked.id, "send-unknown"),
+          kind: "unknown", source: "send-unknown" });
+      throw error;
+    }
     try {
-      if (result.id !== checked.id || result.state !== "accepted" || result.target?.conversationId !== target
-          || result.delivery !== checked.delivery || result.triggerTurn !== checked.triggerTurn)
+      if (result.id !== checked.id || result.messageId !== checked.id || result.requestId !== checked.requestId
+          || result.runId !== checked.runId || result.runtimeId !== checked.runtimeId
+          || result.inReplyTo !== (checked.inReplyTo ?? null) || result.state !== "accepted"
+          || result.target?.conversationId !== target || result.delivery !== checked.delivery
+          || result.triggerTurn !== checked.triggerTurn)
         throw new Error("Mismatched peer send response");
-      return result;
-    } catch (error) { throw unknownSend(error); }
+      const deliveryEvidence = this.deliveries.observe({ messageId: checked.id,
+        evidenceId: messageDeliveryEvidenceId(checked.id, "peer-send-returned"), kind: "accepted", source: "peer-send-returned" });
+      return { ...result, deliveryEvidence };
+    } catch (error) {
+      this.deliveries.observe({ messageId: checked.id, evidenceId: messageDeliveryEvidenceId(checked.id, "send-unknown"),
+        kind: "unknown", source: "send-unknown" });
+      throw unknownSend(error);
+    }
   }
 
   /** Authenticated child-to-origin delivery only; callers cannot select an arbitrary parent. */
@@ -813,7 +851,7 @@ export class PeerRuntime {
     const parent = this.target(origin.conversationId);
     if (!sameIdentity(parent, origin)) throw new Error("Verified origin identity changed; notification authority is revoked");
     return this.send(origin.conversationId, { id: peerAgentNotificationId(notification),
-      requestId: handle.requestId, kind: "progress", text: notificationText(notification),
-      delivery: "followUp", triggerTurn: true }, signal);
+      requestId: handle.requestId, runId: handle.runId, runtimeId: handle.runtimeId, inReplyTo: handle.messageId,
+      kind: "progress", text: notificationText(notification), delivery: "followUp", triggerTurn: true }, signal);
   }
 }

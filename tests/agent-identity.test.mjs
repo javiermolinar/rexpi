@@ -67,14 +67,14 @@ test("partial identity matches and conflicting run correlations are ambiguous", 
   assert.throws(() => assertSameAgentRun(current, { ...current, endpointGeneration: 2 }), /Stale/);
 });
 
-test("existing related peer request routes retain their version-one wire format", () => {
+test("related peer request routes retain their version-one request envelope with strict correlation", () => {
   const fromIdentity = identity("main"), toIdentity = identity("review");
   toIdentity.taskId = fromIdentity.taskId;
   const from = endpointFromBinding(binding(fromIdentity));
   const to = endpointFromBinding(binding(toIdentity));
   const body = JSON.stringify({ type: "pi-rex.peer", version: 1, id: uuid(), op: "send", from, to,
-    params: { id: uuid(), requestId: "peer-task", kind: "question", text: "Review this finding",
-      delivery: "followUp", triggerTurn: true } });
+    params: { id: uuid(), requestId: "peer-task", runId: uuid(), runtimeId: uuid(), inReplyTo: null,
+      kind: "question", text: "Review this finding", delivery: "followUp", triggerTurn: true } });
   const decoded = decodePeerRequest(body);
   assert.equal(decoded.from.token, from.token); assert.equal(decoded.to.token, to.token);
   assert.equal(decoded.params.requestId, "peer-task"); assert.equal(decoded.op, "send");

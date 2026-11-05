@@ -31,7 +31,7 @@ async function setup(t, options = {}) {
   const own = a.runtime.snapshot(), owner = endpointFromBinding(a.store.find(own.state, own.server));
   const childBinding = binding({ ...identity("review"), taskId: owner.taskId }); a.store.write(childBinding);
   a.w.blocks.set(childBinding.blockId, { sessionId: a.w.source.sessionId, windowId: rid("window"), blockId: childBinding.blockId });
-  const child = endpointFromBinding(childBinding), box = new FileMailbox(a.root, owner, a.store, own.server);
+  const child = endpointFromBinding(childBinding), box = new FileMailbox(a.root, owner, a.store, own.server), tickets = new Map();
   return { ...a, m, sm, sent, timers, notices, tools, commands, owner, child, box,
     setCurrent(value) { current = value; },
     async command(action, ctx = a.ctx, signal) {
@@ -39,8 +39,11 @@ async function setup(t, options = {}) {
       return { text: result.content[0].text, details: result.details };
     },
     inbox(after, signal) { return tools.get("rex_message_inbox").execute("inspect", { after }, signal, undefined, a.ctx); },
-    async register() { const ticket = await m.prepareReturn(); await m.registerReturn(ticket, child); await m.poll(); await flush(); return ticket; },
-    message(requestId, text = "unprocessed finding") { return makeEnvelope(child, owner, requestId, "result", text); },
+    async register() { const ticket = await m.prepareReturn(); tickets.set(ticket.requestId, ticket);
+      await m.registerReturn(ticket, child); await m.poll(); await flush(); return ticket; },
+    message(requestId, text = "unprocessed finding") { const ticket = tickets.get(requestId);
+      return makeEnvelope(child, owner, requestId, "result", text, undefined, ticket
+        ? { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId } : {}); },
   };
 }
 function evidence(f) {

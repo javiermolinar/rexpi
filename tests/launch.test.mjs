@@ -131,6 +131,15 @@ test("verified launch binds exact task, conversation, session, block and process
   assert.equal(result.target.blockId, a.w.next.blockId);
   assert.equal(result.handle.requestId, "call-1");
   assert.equal(result.handle.endpointGeneration, 1);
+  const relations = launcher.relations();
+  assert.equal(relations.length, 1);
+  assert.deepEqual(relations[0].handle, result.handle);
+  assert.equal(relations[0].childBlockId, result.target.blockId);
+  assert.equal(relations[0].parentBlockId, a.runtime.snapshot().blockId);
+  assert.equal(relations[0].parentGeneration, a.runtime.snapshot().generation);
+  assert.match(relations[0].parentBindingId, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(JSON.stringify(relations).includes("token"), false);
+  assert.deepEqual(setup(a).relations(), relations, "a replacement launcher can inspect only retained launch evidence");
   const rawHandle = a.w.created[0].find(arg => arg.startsWith(AGENT_BOOTSTRAP_ENV + "="));
   assert.deepEqual(decodeAgentBootstrap(rawHandle.slice(rawHandle.indexOf("=") + 1)), result.handle);
   assert.ok(a.w.created[0].includes("--shell=none"));
@@ -176,6 +185,7 @@ test("new independent tasks get a new task identity and a selected session", asy
   assert.equal(result.startup.state, "bound");
   assert.notEqual(result.identity.taskId, a.runtime.snapshot().state.taskId);
   assert.equal(result.handle, undefined);
+  assert.equal(launcher.relations().length, 0);
   assert.equal(a.w.created[0].some(arg => arg.startsWith(AGENT_BOOTSTRAP_ENV + "=")), false);
   assert.equal(a.w.selectCalls, 1);
 });
@@ -214,10 +224,11 @@ test("lost creation reply is unknown, not failed or automatically retried", asyn
   assert.equal(a.w.calls.some(c => c.includes("close") || c.includes("kill") || c.includes("send")), false);
 });
 test("missing startup acknowledgement preserves the created pane", async t => {
-  const a = await active(t), result = await setup(a).launch("timeout", { related: true }, a.root);
+  const a = await active(t), launcher = setup(a), result = await launcher.launch("timeout", { related: true }, a.root);
   assert.equal(result.creation, "confirmed");
   assert.equal(result.startup.state, "unconfirmed");
   assert.equal(result.target.blockId, a.w.next.blockId);
+  assert.equal(launcher.relations().length, 0, "an unconfirmed binding is not relation evidence");
   assert.equal(a.w.created.length, 1);
 });
 test("a wrong conversation binding cannot confirm startup", async t => {

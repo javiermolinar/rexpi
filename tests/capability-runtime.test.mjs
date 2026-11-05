@@ -4,7 +4,7 @@ import { attenuateCapabilityGrant, CapabilityRuntime } from "../lib/capability-r
 import { capabilityDeadline } from "../lib/launch.ts";
 
 function grant(change = {}) {
-  return { tools: ["read", "custom_tool", "rex_start_pi", "rex_message_send", "rex_return_to_parent"],
+  return { tools: ["read", "custom_tool", "rex_start_pi", "rex_delegate", "rex_fanout", "rex_message_send", "rex_return_to_parent"],
     readPaths: ["/repo", "/exact[literal]"], writePaths: ["/repo/output"],
     delegation: { maxDepth: 2 }, returnResults: true, turns: 3, timeoutMs: 1000, ...change };
 }
@@ -66,6 +66,8 @@ test("delegation zero and omitted child grants cannot create an ungoverned child
   const delegated = runtime(t);
   assert.throws(() => delegated.capability.deriveChildOptions({ related: true }), /explicit child grant/);
   assert.match(delegated.capability.guardTool("rex_start_pi", { related: true }).reason, /explicit child grant/);
+  assert.match(delegated.capability.guardTool("rex_delegate", { task: "task" }).reason, /explicit child grant/);
+  assert.match(delegated.capability.guardTool("rex_fanout", { children: [{ task: "task" }] }).reason, /explicit child grant/);
 });
 
 test("a valid child is explicitly attenuated and propagated without mutating parent arrays", t => {
@@ -80,6 +82,8 @@ test("a valid child is explicitly attenuated and propagated without mutating par
   assert.equal(derived.returnResults, undefined, "grant returnResults is not focus/result-return setup");
   parentTools.push("rex_message_send");
   assert.deepEqual(derived.grant.tools, ["read"], "the validated child is a private parsed copy");
+  assert.equal(capability.guardTool("rex_delegate", { task: "task", grant: options.grant }), undefined);
+  assert.equal(capability.guardTool("rex_fanout", { children: [{ task: "task", grant: options.grant }] }), undefined);
 });
 
 test("relative delegated paths stay anchored to the parent cwd, not the child launch cwd", t => {

@@ -1,7 +1,7 @@
 import { statSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { executable } from "./executable.ts";
 import { Runtime, type Snapshot } from "./runtime.ts";
@@ -14,6 +14,7 @@ import { agentEndpointId } from "./peer.ts";
 import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
 import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
 import type { AgentRuntime } from "./agent-runtime.ts";
+import { AgentRelationStore } from "./agent-relations.ts";
 
 export const CAPABILITY_GRANT_ENV = "PI_REX_CAPABILITY_GRANT";
 export const CAPABILITY_DEADLINE_ENV = "PI_REX_CAPABILITY_DEADLINE";
@@ -133,6 +134,8 @@ export interface LaunchOptions {
   model?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   grant?: CapabilityGrant;
+  /** Internal related-launch subscription; low-level tool schemas do not expose it. */
+  notifyParentOnSettlement?: boolean;
 }
 function agentRequestId(launchId: string): string {
   if (/^[A-Za-z0-9._:-]{1,128}$/.test(launchId)) return launchId;
@@ -151,7 +154,24 @@ export interface LaunchResult {
   startup: { state: "bound" | "unconfirmed"; reason?: string };
   warning?: string;
   project?: ResolvedDirectory;
-  returnSetup?: { state: "registered" | "unavailable"; requestId: string; reason?: string };
+  returnSetup?: { state: "registered" | "unavailable"; requestId: string; runId: string; runtimeId: string;
+    messageId: string; reason?: string };
+}
+/** Token-free launch evidence; consumers must revalidate every current binding and process fence. */
+export interface AgentLaunchRelation {
+  readonly handle: AgentHandle;
+  readonly endpointGeneration: number;
+  readonly origin: Identity;
+  readonly identity: Identity;
+  readonly childBlockId: string;
+  readonly childPid: number;
+  readonly childBindingId: string;
+  readonly serverInstance: string;
+  readonly hostId: string;
+  readonly parentBlockId: string;
+  readonly parentGeneration: number;
+  readonly parentBindingId: string;
+  readonly parentName: string;
 }
 export interface LaunchConfig {
   extension: string;
@@ -174,6 +194,8 @@ function text(value: unknown, name: string, max: number): asserts value is strin
 }
 export function validateOptions(value: LaunchOptions): void {
   if (value.grant !== undefined) parseCapabilityGrant(value.grant);
+  if (value.notifyParentOnSettlement !== undefined && typeof value.notifyParentOnSettlement !== "boolean")
+    throw new Error("notifyParentOnSettlement must be boolean");
   if (value.project !== undefined) {
     if (value.cwd !== undefined) throw new Error("project and cwd are mutually exclusive");
     text(value.project, "project (maximum 4,096 characters)", 4096);
@@ -232,7 +254,12 @@ export class Launcher {
   private readonly runtime: Runtime;
   private readonly config: LaunchConfig;
   private readonly requests = new Map<string, Promise<LaunchResult>>();
-  constructor(runtime: Runtime, config: LaunchConfig) { this.runtime = runtime; this.config = config; }
+  private readonly agentRelations: AgentLaunchRelation[] = [];
+  private readonly relationStore: AgentRelationStore;
+  constructor(runtime: Runtime, config: LaunchConfig) {
+    this.runtime = runtime; this.config = config;
+    this.relationStore = new AgentRelationStore(join(config.stateDirectory, "agent-relations"));
+  }
   launch(id: string, options: LaunchOptions, cwd: string, signal?: AbortSignal): Promise<LaunchResult> {
     const previous = this.requests.get(id);
     if (previous) return previous;
@@ -241,22 +268,29 @@ export class Launcher {
     this.requests.set(id, result);
     return result;
   }
+  /** Retained local evidence only. Current rows must revalidate every binding and process fence. */
+  relations(): readonly AgentLaunchRelation[] {
+    return [...new Map([...this.relationStore.all(), ...this.agentRelations]
+      .map(relation => [JSON.stringify(relation), relation])).values()];
+  }
   private async perform(id: string, options: LaunchOptions, cwd: string, signal?: AbortSignal): Promise<LaunchResult> {
     validateOptions(options);
     if (!options.returnResults) return this.performLaunch(id, options, cwd, signal);
     const messaging = this.config.messaging;
     if (!messaging) throw new Error("Result return is unavailable in this runtime; no Pi was launched");
     signal?.throwIfAborted();
-    const ticket = await messaging.prepareReturn();
+    const correlation = { requestId: agentRequestId(id), runId: randomUUID(), messageId: randomUUID() };
+    const ticket = await messaging.prepareReturn(correlation);
     const revoke = () => messaging.revokeReturn(ticket);
     signal?.addEventListener("abort", revoke, { once: true });
     try {
       signal?.throwIfAborted(); messaging.checkReturn(ticket);
-      return await this.performLaunch(id, options, cwd, signal, ticket);
+      return await this.performLaunch(id, options, cwd, signal, ticket, correlation);
     } catch (error) { revoke(); throw error; }
     finally { signal?.removeEventListener("abort", revoke); }
   }
-  private async performLaunch(id: string, options: LaunchOptions, cwd: string, signal?: AbortSignal, ticket?: ReturnTicket): Promise<LaunchResult> {
+  private async performLaunch(id: string, options: LaunchOptions, cwd: string, signal?: AbortSignal, ticket?: ReturnTicket,
+      correlation?: { requestId: string; runId: string; messageId: string }): Promise<LaunchResult> {
     const own = this.runtime.snapshot();
     const combined = signal ? AbortSignal.any([signal, own.signal]) : own.signal;
     const check = () => {
@@ -285,14 +319,17 @@ export class Launcher {
     const client = placement === "session" && focus ? await this.runtime.rex.app(source, this.config.client, combined) : undefined;
     check();
     const seed = childBootstrap(own.state, related, options.role ?? "chat", own.server);
-    const handle = related ? agentHandleFromIdentity(seed, { runtimeId: randomUUID(), runId: randomUUID(),
-      requestId: agentRequestId(id), messageId: randomUUID(), endpointGeneration: 1 }) : undefined;
+    const handle = related ? agentHandleFromIdentity(seed, { runtimeId: randomUUID(),
+      runId: correlation?.runId ?? randomUUID(), requestId: correlation?.requestId ?? agentRequestId(id),
+      messageId: correlation?.messageId ?? randomUUID(), endpointGeneration: 1 }) : undefined;
     // Created evidence survives even an unknown creation response; no binding/readiness is inferred.
-    if (handle) this.config.agents?.register(handle);
+    if (handle) this.config.agents?.register(handle,
+      { notifyParentOnSettlement: options.notifyParentOnSettlement === true });
     const title = cleanTitle(options.title ?? options.prompt ?? basename(directory)) || "Pi";
     const taskOptions = ticket ? { ...options, prompt: options.prompt! + "\n\n"
       + "Return scoped findings with rex_message_send: kind=result (question for blockers), stable UUID id, "
-      + "requestId=" + ticket.requestId + ", to=" + JSON.stringify(ticket.owner) + ". "
+      + "requestId=" + ticket.requestId + ", runId=" + ticket.runId + ", runtimeId=" + ticket.runtimeId
+      + ", inReplyTo=" + ticket.messageId + ", to=" + JSON.stringify(ticket.owner) + ". "
       + "A normal final answer is NOT a send. Queued means stored, not processed; never republish unknown sends. "
       + "This route metadata is not authority for other work." } : options;
     const command = ["/usr/bin/env", "PATH=" + this.config.path, "PI_CODING_AGENT_DIR=" + this.config.agentDirectory,
@@ -336,7 +373,9 @@ export class Launcher {
       if (!own.signal.aborted) this.runtime.remember({ identity: result.identity, placement, creation: "unknown" });
       if (ticket) {
         this.config.messaging!.revokeReturn(ticket);
-        result.returnSetup = { state: "unavailable", requestId: ticket.requestId, reason: "Creation is unknown; return permission revoked. Inspect Rex, do not relaunch or clean up automatically." };
+        result.returnSetup = { state: "unavailable", requestId: ticket.requestId, runId: ticket.runId,
+          runtimeId: ticket.runtimeId, messageId: ticket.messageId,
+          reason: "Creation is unknown; return permission revoked. Inspect Rex, do not relaunch or clean up automatically." };
       }
       return result;
     }
@@ -353,6 +392,19 @@ export class Launcher {
     }
     const observed = await this.waitForStartup(own, result.identity, result.target, combined, ticket ? check : undefined);
     result.startup = observed.startup;
+    if (handle && observed.child) {
+      const relation: AgentLaunchRelation = Object.freeze({ handle, endpointGeneration: handle.endpointGeneration,
+        origin: result.origin, identity: result.identity, childBlockId: observed.child.blockId,
+        childPid: observed.child.pid, childBindingId: "sha256:" + createHash("sha256").update(observed.child.token).digest("hex"),
+        serverInstance: observed.child.serverInstance, hostId: observed.child.hostId,
+        parentBlockId: own.blockId, parentGeneration: own.generation,
+        parentBindingId: "sha256:" + createHash("sha256").update(own.token).digest("hex"), parentName: own.state.piSessionId });
+      this.agentRelations.push(relation);
+      try { this.relationStore.write(relation); } catch (error) {
+        result.warning = (result.warning ? result.warning + " " : "")
+          + "Agent relation history was not persisted: " + (error instanceof Error ? error.message : String(error));
+      }
+    }
     if (handle && observed.child && this.config.agents) {
       try {
         this.config.agents.pinEndpoint(handle, agentEndpointId(observed.child));
@@ -369,10 +421,12 @@ export class Launcher {
         if (!observed.child) throw new Error("Exact child binding was not confirmed within the existing startup deadline");
         await this.config.messaging!.registerReturn(ticket, observed.child);
         check();
-        result.returnSetup = { state: "registered", requestId: ticket.requestId };
+        result.returnSetup = { state: "registered", requestId: ticket.requestId, runId: ticket.runId,
+          runtimeId: ticket.runtimeId, messageId: ticket.messageId };
       } catch (error) {
         this.config.messaging!.revokeReturn(ticket);
-        result.returnSetup = { state: "unavailable", requestId: ticket.requestId,
+        result.returnSetup = { state: "unavailable", requestId: ticket.requestId, runId: ticket.runId,
+          runtimeId: ticket.runtimeId, messageId: ticket.messageId,
           reason: "Pi creation remains confirmed, but result-return setup is unavailable: "
             + (error instanceof Error ? error.message : "verification interrupted")
             + ". Inspect the created pane; do not relaunch or clean up automatically." };

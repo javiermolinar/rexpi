@@ -31,7 +31,8 @@ async function setup(t, options = {}) {
   return { ...a, sm, own, owner, child, m, events, tools, sent, tool,
     setCurrent: value => { current = value; },
     call: (id, params, signal) => tool.execute(id, params, signal, undefined, a.ctx),
-    params: { to: child, requestId: "explicit-task", kind: "result", text: "Scoped findings" } };
+    params: { to: child, requestId: "explicit-task", runId: uuid(), runtimeId: uuid(), inReplyTo: uuid(),
+      kind: "result", text: "Scoped findings" } };
 }
 
 test("send schema includes main parent routes; no inbox/control tools or implicit grants", async t => {
@@ -97,7 +98,8 @@ test("strict routes, body bounds, stale/native endpoints and aborted calls fail 
 test("actual UI/input/start/abort/settled events hold and revoke future follow-ups", async t => {
   const f = await setup(t), ticket = await f.m.prepareReturn(); await f.m.registerReturn(ticket, f.child); await f.m.poll();
   const box = new FileMailbox(f.root, f.owner, f.store, f.own.server);
-  box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "result", "Finding"));
+  box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "result", "Finding", undefined,
+    { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId }));
   f.events.get("ui_prompt_start")({}, f.ctx); await f.m.poll(); assert.equal(f.sent.length, 0);
   f.events.get("input")({}, f.ctx); f.events.get("ui_prompt_end")({}, f.ctx);
   await f.m.poll(); assert.equal(f.sent.length, 0);
@@ -106,7 +108,8 @@ test("actual UI/input/start/abort/settled events hold and revoke future follow-u
   assert.deepEqual(f.sent[0].opts, { triggerTurn: true, deliverAs: "followUp" });
   f.events.get("tool_call")({}, f.ctx); c.abort();
   assert.equal(f.m.snapshot().returnRequests, 0);
-  box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "question", "Another finding"));
+  box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "question", "Another finding", undefined,
+    { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId }));
   f.events.get("agent_settled")({ aborted: true }, f.ctx); await f.m.poll(); assert.equal(f.sent.length, 1);
 });
 
@@ -116,7 +119,8 @@ test("before navigation/replacement events revoke even cancelled operations; reg
     assert.equal(f.events.get(event)({}, f.ctx), undefined);
     assert.equal(f.m.snapshot().enabled, false); assert.equal(f.m.snapshot().returnRequests, 0);
     const box = new FileMailbox(f.root, f.owner, f.store, f.own.server);
-    box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "result", "finding"));
+    box.publish(makeEnvelope(f.child, f.owner, ticket.requestId, "result", "finding", undefined,
+      { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId }));
     await f.m.poll(); assert.equal(f.sent.length, 0);
   }
 });

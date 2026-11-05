@@ -4,9 +4,8 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { executable } from "../lib/executable.ts";
-import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, decodeCapabilityDeadline, decodeCapabilityGrant, Launcher, MAX_CAPABILITY_DELEGATION_DEPTH,
-  MAX_CAPABILITY_PATH_LENGTH, MAX_CAPABILITY_PATHS, MAX_CAPABILITY_TIMEOUT_MS, MAX_CAPABILITY_TOOL_LENGTH,
-  MAX_CAPABILITY_TOOLS, MAX_CAPABILITY_TURNS, type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
+import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, decodeCapabilityDeadline, decodeCapabilityGrant, Launcher,
+  type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
 import { CapabilityRuntime } from "../lib/capability-runtime.ts";
 import { registerCapabilityPathTools } from "../lib/capability-paths.ts";
 import { OutcomeCache } from "../lib/outcome-cache.ts";
@@ -31,20 +30,12 @@ import { AgentRuntime } from "../lib/agent-runtime.ts";
 import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap, type AgentHandle } from "../lib/agent.ts";
 import { registerAgentTools } from "./agent.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
-
-const capabilityPaths = () => Type.Array(Type.String({ minLength: 1, maxLength: MAX_CAPABILITY_PATH_LENGTH }),
-  { maxItems: MAX_CAPABILITY_PATHS, uniqueItems: true });
-const capabilityGrant = Type.Object({
-  tools: Type.Array(Type.String({ minLength: 1, maxLength: MAX_CAPABILITY_TOOL_LENGTH,
-    pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }), { maxItems: MAX_CAPABILITY_TOOLS, uniqueItems: true }),
-  readPaths: capabilityPaths(),
-  writePaths: capabilityPaths(),
-  delegation: Type.Object({ maxDepth: Type.Integer({ minimum: 0, maximum: MAX_CAPABILITY_DELEGATION_DEPTH }) },
-    { additionalProperties: false }),
-  returnResults: Type.Boolean(),
-  turns: Type.Integer({ minimum: 1, maximum: MAX_CAPABILITY_TURNS }),
-  timeoutMs: Type.Integer({ minimum: 1, maximum: MAX_CAPABILITY_TIMEOUT_MS }),
-}, { additionalProperties: false });
+import { capabilityGrant } from "./grants.ts";
+import { DelegationCache, DelegationRuntime } from "../lib/delegation.ts";
+import { FanoutRegistry, FanoutRuntime } from "../lib/fanout.ts";
+import { JoinCache, JoinRuntime } from "../lib/join.ts";
+import { registerFanoutTools } from "./fanout.ts";
+import { registerDelegationTool } from "./delegation.ts";
 
 const schema = Type.Object({
   prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Optional task; omit for an empty chat." })),
@@ -87,8 +78,12 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   if (!rexId(process.env.REX_SESSION, "session") || !rexId(process.env.REX_BLOCK, "block")) return;
 
   let runtime: Runtime | undefined;
-  const agents = registerAgentsCommand(pi, () => runtime);
+  const agents = registerAgentsCommand(pi, () => runtime,
+    () => ({ relations: launcher?.relations() ?? [], statuses: agentRuntime.cachedStatuses() }));
   let launcher: Launcher | undefined;
+  let delegation: DelegationRuntime | undefined;
+  let fanout: FanoutRuntime | undefined;
+  let joinRuntime: JoinRuntime | undefined;
   let messaging: MessagingRuntime | undefined;
   let capability: CapabilityRuntime | undefined;
   let capabilityContext: ExtensionContext | undefined;
@@ -103,6 +98,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   // same-session tree reinitialization, independently of replaceable Launcher/Runtime objects.
   const launchCalls = new OutcomeCache<LaunchResult>(256,
     "Launch tool-call history is full (256); inspect prior outcomes before explicitly reloading");
+  const delegationCalls = new DelegationCache();
+  const fanoutRegistry = new FanoutRegistry(), joinCache = new JoinCache();
   let registered = false;
   let shortcutRegistered = false;
   let consumed = false;
@@ -117,7 +114,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
     agentRuntime.detach();
     peer?.detach(); peer = undefined;
     runtime?.stop(); runtime = undefined;
-    launcher = undefined; terminal = undefined; sessions = undefined;
+    launcher = undefined; delegation = undefined; fanout = undefined; joinRuntime = undefined; terminal = undefined; sessions = undefined;
   };
 
   const initialize = async (ctx: ExtensionContext, allowBootstrap: boolean) => {
@@ -182,6 +179,9 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         piBinary: process.env.PI_REX_BINARY ?? "pi", path: process.env.PATH ?? "",
         client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY, agentsKey: process.env.PI_REX_AGENTS_KEY,
         messagesStopKey: process.env.PI_REX_MESSAGES_STOP_KEY, agents: agentRuntime });
+      delegation = new DelegationRuntime(launcher, agentRuntime, delegationCalls);
+      fanout = new FanoutRuntime(delegation, fanoutRegistry);
+      joinRuntime = new JoinRuntime(delegation, joinCache);
       terminal = new TerminalOpener(active);
       sessions = new SessionOpener(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal), process.env.PI_REX_CLIENT);
       if (!shortcutRegistered) {
@@ -257,6 +257,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         registerConversationTools(toolApi, () => ({ runtime, messaging }));
         registerPeerTools(toolApi, () => ({ runtime, peer }));
         registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime }));
+        registerDelegationTool(toolApi, () => ({ runtime, delegation, messaging, capability, cache: delegationCalls }));
+        registerFanoutTools(toolApi, () => ({ runtime, fanout, join: joinRuntime, registry: fanoutRegistry, messaging, capability }));
         registerTerminalFeatures(toolApi, () => ({ runtime, terminal }), ctx);
         registerSessionTool(toolApi, () => ({ runtime, sessions }));
       }

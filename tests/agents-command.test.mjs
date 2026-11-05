@@ -5,10 +5,10 @@ import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { registerAgentsCommand } from "../extensions/agents.ts";
 import { active } from "./fixtures.mjs";
 
-async function setup(t) {
+async function setup(t, evidence = () => ({ relations: [], statuses: [] })) {
   const a = await active(t), commands = new Map(), notices = [];
   let runtime = a.runtime, overlay, opened = 0;
-  const { cancel, open } = registerAgentsCommand({ registerCommand: (name, command) => commands.set(name, command) }, () => runtime);
+  const { cancel, open } = registerAgentsCommand({ registerCommand: (name, command) => commands.set(name, command) }, () => runtime, evidence);
   const ctx = { ...a.ctx, ui: { ...a.ctx.ui, notify: (...args) => notices.push(args),
     custom: async (factory, options) => {
       assert.equal(options.overlay, true); opened++;
@@ -35,6 +35,14 @@ test("opening only reads, double open is ignored, Escape cancels and reopening w
   assert.equal(a.w.focusCalls ?? 0, 0);
   const again = a.open(); await until(() => a.opened === 2 && a.overlay?.selectedRow());
   a.overlay.handleInput("\x1b"); await again;
+});
+test("the open overlay snapshots supplied launch and cached-status evidence", async t => {
+  let calls = 0;
+  const a = await setup(t, () => { calls++; return { relations: [], statuses: [] }; });
+  const running = a.open();
+  await until(() => a.overlay?.selectedRow() && calls > 0);
+  assert.equal(calls, 1);
+  a.overlay.handleInput("\x1b"); await running;
 });
 test("canonical agents command and labeled alias share the same overlay and reentry guard", async t => {
   const a = await setup(t);

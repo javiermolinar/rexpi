@@ -50,6 +50,9 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
     parameters: Type.Object({
       target,
       requestId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }),
+      runId: Type.String({ pattern: UUID_PATTERN }),
+      runtimeId: Type.String({ pattern: UUID_PATTERN }),
+      inReplyTo: Type.Optional(Type.String({ pattern: UUID_PATTERN })),
       kind: literalUnion(MESSAGE_KINDS),
       text: Type.String({ minLength: 1, maxLength: 32768, description: "Aggregate 32/40 KiB envelope/request limits apply." }),
       delivery: literalUnion(["steer", "followUp"] as const),
@@ -57,7 +60,8 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
       id: Type.Optional(Type.String({ maxLength: 36, pattern: UUID_PATTERN, description: "Stable request UUID; omit to allocate once." })),
     }, { additionalProperties: false }),
     async execute(toolCallId, params, signal, _update, ctx) {
-      const payload = { target: params.target, requestId: params.requestId, kind: params.kind,
+      const payload = { target: params.target, requestId: params.requestId, runId: params.runId,
+        runtimeId: params.runtimeId, inReplyTo: params.inReplyTo ?? null, kind: params.kind,
         text: params.text, delivery: params.delivery, triggerTurn: params.triggerTurn };
       const callDigest = createHash("sha256").update(JSON.stringify({ ...payload, id: params.id })).digest("hex");
       let call = calls.get(toolCallId);

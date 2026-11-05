@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import type { Server } from "../state.ts";
 import type { Endpoint, Envelope } from "./protocol.ts";
+import { unknownMessageDelivery } from "./delivery.ts";
 import type { SendResult } from "./file-transport.ts";
 
 export interface MailboxPage { messages: Envelope[]; next?: string }
@@ -31,7 +32,8 @@ export class WorkerMailboxTransport {
         try { return await this.call("publish", recipient, envelope) as SendResult; }
         catch (error) {
           if (error instanceof WorkerOutcomeError)
-            return { id: envelope.id, state: "unknown", durability: "unknown" };
+            return { id: envelope.id, state: "unknown", durability: "unknown",
+              delivery: unknownMessageDelivery(envelope.messageId) };
           throw error;
         }
       },

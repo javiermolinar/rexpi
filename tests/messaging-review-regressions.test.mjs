@@ -132,7 +132,8 @@ for (const mode of ["missing", "corrupt", "replacement", "identical-replacement"
     f.w.blocks.set(b.blockId, { sessionId: f.w.source.sessionId, windowId: rid("window"), blockId: b.blockId });
     const child = endpointFromBinding(b), ticket = await f.m.prepareReturn();
     await f.m.registerReturn(ticket, child); await f.m.poll();
-    const e = makeEnvelope(child, f.owner, ticket.requestId, "result", "isolated finding", uuid()); f.mailbox.publish(e);
+    const e = makeEnvelope(child, f.owner, ticket.requestId, "result", "isolated finding", uuid(),
+      { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId }); f.mailbox.publish(e);
     await assert.rejects(f.m.poll(), /no automatic replay/);
     assert.equal(changed, true); assert.equal(f.sent.length, 0); assert.equal(f.m.snapshot().attempted, 1);
     assert.equal(f.m.snapshot().processingConfirmed, false);

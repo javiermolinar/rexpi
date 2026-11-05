@@ -631,6 +631,11 @@ export class AgentRuntime {
     }
   }
 
+  /** Synchronous retained evidence for local presentation; never performs a peer read. */
+  cachedStatuses(): readonly AgentStatus[] {
+    return [...this.runs.values()].map(current => this.snapshot(current, "retained"));
+  }
+
   async status(value: unknown, signal?: AbortSignal): Promise<AgentStatus> {
     const current = this.exact(value), reader = this.reader, epoch = this.epoch, probe = ++current.probe;
     signal?.throwIfAborted();

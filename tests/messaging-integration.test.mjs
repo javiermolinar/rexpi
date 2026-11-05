@@ -10,7 +10,8 @@ import { FileMailbox } from "../lib/messaging/file-transport.ts";
 import { makeEnvelope } from "../lib/messaging/protocol.ts";
 import { FOLLOWUP_CONTEXT, FOLLOWUP_INTENT } from "../lib/messaging/receipts.ts";
 
-const params = (p, owner, extra = {}) => ({ to: owner, requestId: p.requestId, kind: "result", text: "scoped fixture finding", id: uuid(), ...extra });
+const params = (p, owner, extra = {}) => ({ to: owner, requestId: p.requestId, runId: p.runId,
+  runtimeId: p.runtimeId, inReplyTo: p.inReplyTo, kind: "result", text: "scoped fixture finding", id: uuid(), ...extra });
 const intents = f => f.sm.getEntries().filter(e => e.customType === FOLLOWUP_INTENT);
 
 test("integration: fixture Launcher routes two live Node children exactly and batches simultaneous idle returns", async t => {
@@ -103,7 +104,8 @@ test("integration: filesystem refusal, capacity and duplicate logical sends pres
   await assert.rejects(p.request("send", { params: unsafe }), /Unsafe/, "cached refusal is not retried after repair");
   const store = new BindingStore(join(f.root, "bindings"));
   const small = new FileMailbox(f.root, f.owner, store, f.own.server, { limits: { entries: 1 } });
-  assert.throws(() => small.publish(makeEnvelope(p.endpoint, f.owner, p.requestId, "result", "new")), { code: "capacity" });
+  assert.throws(() => small.publish(makeEnvelope(p.endpoint, f.owner, p.requestId, "result", "new", undefined,
+    { runId: p.runId, runtimeId: p.runtimeId, inReplyTo: p.inReplyTo })), { code: "capacity" });
   assert.equal(f.mailbox.inbox().messages.length, 1); await f.m.poll(); assert.equal(f.sent.length, 1);
 });
 
@@ -126,8 +128,10 @@ test("integration: real receiver crashes after publish, intent or enqueue retain
     const seed = childBootstrap(receiver.ready.state, true, "review", server);
     const sender = await spawnPeer(t, { root, server, seed, sessionId: seed.piSessionId, peers: [receiver.ready.endpoint] });
     await receiver.request("register", { requestId: ticket.requestId, endpoint: sender.ready.endpoint });
-    const e = makeEnvelope(sender.ready.endpoint, receiver.ready.endpoint, ticket.requestId, "result", "crash finding");
-    await sender.request("send", { params: { to: e.to, requestId: e.requestId, kind: e.kind, text: e.text, id: e.id } });
+    const e = makeEnvelope(sender.ready.endpoint, receiver.ready.endpoint, ticket.requestId, "result", "crash finding", undefined,
+      { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId });
+    await sender.request("send", { params: { to: e.to, requestId: e.requestId, runId: e.runId, runtimeId: e.runtimeId,
+      inReplyTo: e.inReplyTo, kind: e.kind, text: e.text, id: e.id } });
     if (phase === "pre-intent") {
       receiver.child.kill("SIGKILL"); assert.equal((await receiver.exit).signal, "SIGKILL");
     } else {
@@ -135,8 +139,8 @@ test("integration: real receiver crashes after publish, intent or enqueue retain
       await assert.rejects(receiver.request("poll"), /fixture exited/);
       assert.equal((await receiver.exit).code, { intent: 71, "enqueue-before": 72, "enqueue-after": 73 }[phase]);
     }
-    await assert.rejects(sender.request("send", { params: { to: e.to, requestId: e.requestId,
-      kind: "result", text: "parent disappeared", id: uuid() } }), /live|stale|closed|unavailable/i);
+    await assert.rejects(sender.request("send", { params: { to: e.to, requestId: e.requestId, runId: e.runId,
+      runtimeId: e.runtimeId, inReplyTo: e.inReplyTo, kind: "result", text: "parent disappeared", id: uuid() } }), /live|stale|closed|unavailable/i);
     const restarted = await spawnPeer(t, { root, server, blockId, sessionFile: receiver.ready.sessionFile, peers: [sender.ready.endpoint] });
     const observed = await restarted.request("inspect", { envelope: e });
     assert.equal(observed.status, phase === "pre-intent" ? "new" : phase === "enqueue-after" ? "inserted" : "reserved");

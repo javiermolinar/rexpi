@@ -56,6 +56,18 @@ export interface PickerOptions<Row> {
   refresh(): void;
   requestRender(): void;
 }
+export interface PickerBadge {
+  readonly text: string;
+  readonly compact: string;
+  readonly tone: PickerTone;
+}
+export interface PickerRowMeta {
+  /** Additional relation indentation on an actual row; never a synthetic picker item. */
+  readonly prefix: string;
+  readonly parent?: string;
+  readonly activity?: PickerBadge;
+  readonly result?: PickerBadge;
+}
 export interface PickerPresentation<Row> {
   title: string;
   loading: string;
@@ -69,6 +81,7 @@ export interface PickerPresentation<Row> {
   status(row: Row): { tone: PickerTone; text: string };
   details(row: Row, rows: Row[]): string;
   search(row: Row): string;
+  meta?(row: Row): PickerRowMeta | undefined;
   markBlocked?(row: Row): string;
   summary?(rows: Row[]): string;
 }
@@ -189,15 +202,34 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
     const continuation = "  " + (lastAgent ? "   " : "│  ");
     const checkbox = this.options.markIdentity ? this.marked.has(row.key) ? s.accent("[x] ")
       : s.muted(this.options.markIdentity(row) !== undefined ? "[ ] " : "[-] ") : "";
-    const prefix = marker + s.muted(branch) + checkbox, prefixWidth = visibleWidth(prefix);
-    const nameWidth = Math.max(1, width - prefixWidth - visibleWidth(status) - 2);
-    const clipped = truncateToWidth(name, nameWidth, "…");
-    const first = prefix + s.title(clipped) + " ".repeat(Math.max(2, width - prefixWidth - visibleWidth(clipped) - visibleWidth(status))) + status;
-    const second = s.muted("  " + continuation + (this.options.markIdentity ? "    " : "") + truncateToWidth(agentText(this.view.details(row, this.rows)), Math.max(1, width - prefixWidth), "…"));
+    const meta = this.view.meta?.(row), relation = meta?.prefix ?? "";
+    const prefix = marker + s.muted(branch) + checkbox + relation, prefixWidth = visibleWidth(prefix);
     const pad = (line: string) => {
       const text = truncateToWidth(line, width, "");
       return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
     };
+    let first: string;
+    if (!meta) {
+      // Preserve the established two-line layout for ordinary agents and other pickers.
+      const nameWidth = Math.max(1, width - prefixWidth - visibleWidth(status) - 2);
+      const clipped = truncateToWidth(name, nameWidth, "…");
+      first = prefix + s.title(clipped) + " ".repeat(Math.max(2, width - prefixWidth - visibleWidth(clipped) - visibleWidth(status))) + status;
+    } else {
+      const wide = width >= 60, narrow = width < 36;
+      const badge = (value: PickerBadge | undefined) => value
+        ? s.status(value.tone, agentText(narrow ? value.compact : value.text)) : undefined;
+      const parts = narrow
+        ? [badge(meta.activity), badge(meta.result), status]
+        : [status, wide && meta.parent ? s.muted(agentText(meta.parent)) : undefined,
+          wide ? badge(meta.activity) : undefined, badge(meta.result)];
+      const tail = parts.filter((value): value is string => !!value).join("  "), tailWidth = visibleWidth(tail);
+      const nameWidth = Math.max(1, width - prefixWidth - tailWidth - 2);
+      const clipped = truncateToWidth(name, nameWidth, "…");
+      first = prefix + s.title(clipped) + " ".repeat(Math.max(1, width - prefixWidth - visibleWidth(clipped) - tailWidth)) + tail;
+    }
+    const secondPrefix = "  " + continuation + (this.options.markIdentity ? "    " : "") + " ".repeat(visibleWidth(relation));
+    const second = s.muted(secondPrefix + truncateToWidth(agentText(this.view.details(row, this.rows)),
+      Math.max(1, width - visibleWidth(secondPrefix)), "…"));
     return selected ? [s.selected(pad(first)), s.selected(pad(second))] : [truncateToWidth(first, width, ""), second];
   }
   private bodyLines(width: number, budget: number): string[] {

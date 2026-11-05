@@ -55,9 +55,10 @@ async function inspectInbox(active: MessagingRuntime, after?: string, signal?: A
     throw new Error("Mailbox inspection page exceeds bound");
   const messages = page.messages.map(value => {
     const e = decodeEnvelope(JSON.stringify(value));
-    return { id: e.id, requestId: e.requestId, at: e.at, kind: e.kind, from: e.from, to: e.to,
+    return { id: e.id, messageId: e.messageId, requestId: e.requestId, runId: e.runId,
+      inReplyTo: e.inReplyTo, runtimeId: e.runtimeId, at: e.at, kind: e.kind, from: e.from, to: e.to,
       digest: digest(e), preview: preview(e.text), previewTruncated: e.text.length > 512,
-      processingConfirmed: false };
+      delivery: active.messageDelivery(e.messageId), processingConfirmed: false };
   });
   return { notice: inspectionNotice, messages, next: page.next, truncated: page.next !== undefined };
 }
@@ -120,6 +121,9 @@ export function registerMessageSend(pi: ExtensionAPI, get: () => MessagingRuntim
     parameters: Type.Object({
       to: route,
       requestId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }),
+      runId: Type.String({ pattern: UUID_PATTERN }),
+      runtimeId: Type.String({ pattern: UUID_PATTERN }),
+      inReplyTo: Type.String({ pattern: UUID_PATTERN }),
       kind: literalUnion(MESSAGE_KINDS),
       text: Type.String({ minLength: 1, maxLength: 32768 }),
       id: Type.Optional(Type.String({ maxLength: 36, pattern: UUID_PATTERN,
@@ -128,7 +132,8 @@ export function registerMessageSend(pi: ExtensionAPI, get: () => MessagingRuntim
     async execute(toolCallId, params, signal, _update, ctx) {
       let to = params.to, routeFailure: { error: unknown } | undefined;
       try { to = endpoint(to); } catch (error) { routeFailure = { error }; }
-      const payload = { to, requestId: params.requestId, kind: params.kind, text: params.text };
+      const payload = { to, requestId: params.requestId, runId: params.runId, runtimeId: params.runtimeId,
+        inReplyTo: params.inReplyTo, kind: params.kind, text: params.text };
       // Retain digests, not bodies or arbitrarily large invalid-route input, in both caches.
       const callDigest = createHash("sha256").update(JSON.stringify({ ...payload, id: params.id })).digest("hex");
       let call = calls.get(toolCallId);

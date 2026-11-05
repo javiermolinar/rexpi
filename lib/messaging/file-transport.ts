@@ -1,6 +1,7 @@
 import { constants, closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   opendirSync, readSync, rmdirSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { join, parse, resolve, sep } from "node:path";
+import { acceptedMessageDelivery, unknownMessageDelivery, type MessageDeliverySnapshot } from "./delivery.ts";
 import { randomUUID } from "node:crypto";
 import type { BindingStore } from "../store.ts";
 import { uuid, type Server } from "../state.ts";
@@ -18,6 +19,8 @@ export interface TransportOptions {
 export interface SendResult {
   id: string; state: "queued" | "duplicate" | "unknown";
   durability: "file-and-inbox-fsync" | "observed-existing" | "unknown";
+  /** Storage/acceptance evidence only; target delivery and processing stay unknown. */
+  delivery: MessageDeliverySnapshot;
 }
 export class MailboxError extends Error {
   readonly code: "unsafe" | "busy" | "capacity" | "conflict";
@@ -155,7 +158,8 @@ export class FileMailbox {
           const prior = this.read(name, existing.stat, guard);
           if (digest(prior) !== digest(envelope)) throw new MailboxError("conflict", "Logical message ID has different content");
           this.live(envelope.from); this.live(envelope.to);
-          return { id: envelope.id, state: "duplicate", durability: "observed-existing" };
+          return { id: envelope.id, state: "duplicate", durability: "observed-existing",
+            delivery: acceptedMessageDelivery(envelope.messageId, "mailbox-duplicate") };
         }
         if (entries.length >= this.limits.entries || entries.reduce((n, e) => n + e.stat.size, 0) + body.length > this.limits.bytes)
           throw new MailboxError("capacity", "Mailbox full; no data evicted");
@@ -188,7 +192,8 @@ export class FileMailbox {
           try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
           this.options.checkpoint?.("synced"); guard.check();
           this.live(envelope.from); this.live(envelope.to);
-          return { id: envelope.id, state: "queued", durability: "file-and-inbox-fsync" };
+          return { id: envelope.id, state: "queued", durability: "file-and-inbox-fsync",
+            delivery: acceptedMessageDelivery(envelope.messageId, "mailbox-queued") };
         } finally {
           if (!closed) closeSync(fd);
           // After publication uncertainty, retain evidence. Never remove unknown or stable files.
@@ -201,7 +206,8 @@ export class FileMailbox {
         }
       });
     } catch (error) {
-      if (publicationAttempted) return { id: envelope.id, state: "unknown", durability: "unknown" };
+      if (publicationAttempted) return { id: envelope.id, state: "unknown", durability: "unknown",
+        delivery: unknownMessageDelivery(envelope.messageId) };
       throw error;
     }
   }

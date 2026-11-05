@@ -1,10 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentBrowser, agentText, type AgentRow } from "../lib/agents.ts";
-import { AgentsOverlay, agentsStyle } from "../lib/agents-overlay.ts";
+import { AgentsOverlay, agentsStyle, type AgentBrowserEvidence } from "../lib/agents-overlay.ts";
 import type { Runtime } from "../lib/runtime.ts";
 
 /** Register once inside Rex. Reads and refresh timers exist only while open. */
-export function registerAgentsCommand(pi: ExtensionAPI, getRuntime: () => Runtime | undefined): {
+export function registerAgentsCommand(pi: ExtensionAPI, getRuntime: () => Runtime | undefined,
+    getEvidence: () => AgentBrowserEvidence = () => ({ relations: [], statuses: [] })): {
   cancel: () => void; open: (ctx: ExtensionContext) => Promise<void>;
 } {
   let active: { controller: AbortController; close?: () => void } | undefined;
@@ -52,7 +53,9 @@ export function registerAgentsCommand(pi: ExtensionAPI, getRuntime: () => Runtim
           });
         };
         const overlay = new AgentsOverlay({ style: agentsStyle(theme), keybindings,
-          terminalRows: () => tui.terminal.rows, requestRender: () => tui.requestRender(), refresh, done: finish });
+          terminalRows: () => tui.terminal.rows, requestRender: () => tui.requestRender(), refresh, done: finish },
+        { snapshot: () => runtime.snapshot(), evidence: getEvidence,
+          ascii: !/utf-?8/i.test(process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG ?? "") });
         run.close = () => finish(undefined);
         signal.addEventListener("abort", onAbort, { once: true });
         if (signal.aborted) finish(undefined); else refresh();

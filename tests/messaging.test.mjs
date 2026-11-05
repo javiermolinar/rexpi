@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { execFileSync, fork } from "node:child_process";
 import { join } from "node:path";
 import { FileMailbox } from "../lib/messaging/file-transport.ts";
+import { acceptedMessageDelivery } from "../lib/messaging/delivery.ts";
 import { assertLiveEndpoint, decodeEnvelope, digest, endpointFromBinding, makeEnvelope, MAX_ENVELOPE_BYTES } from "../lib/messaging/protocol.ts";
 import { BindingStore } from "../lib/store.ts";
 import { binding, identity, sandbox, server, uuid, rid } from "./fixtures.mjs";
@@ -45,7 +46,7 @@ test("strict protocol, canonical digest and exact local related endpoints", t =>
 
 test("malformed, oversized and control-shaped envelopes fail before storage", t => {
   const w = setup(t), e = w.envelope;
-  const variants = [{ ...e, version: 2 }, { ...e, extra: true }, { ...e, id: "../escape" },
+  const variants = [{ ...e, version: 1 }, { ...e, extra: true }, { ...e, id: "../escape" },
     { ...e, at: -1 }, { ...e, requestId: "../bad request" }, { ...e, kind: "control" }, { ...e, text: "\u001b[31m" },
     { ...e, text: " " }, { ...e, to: { ...e.to, hostId: uuid() } }, { ...e, from: { ...e.from, taskId: uuid() } },
     { ...e, from: { ...e.from, piSessionId: "../escape" } }, { ...e, to: { ...e.to, token: "../escape" } },
@@ -80,7 +81,8 @@ test("inbox rejects stored non-string sender roles and preserves the evidence", 
 test("private exact layout, stable no-replace publication, duplicate and conflict", t => {
   const w = setup(t);
   assert.equal(w.mailbox.directory, join(w.root, "pi-rex/messages", server.instanceId, w.to.conversationId, "inbox"));
-  assert.deepEqual(w.mailbox.publish(w.envelope), { id: w.envelope.id, state: "queued", durability: "file-and-inbox-fsync" });
+  assert.deepEqual(w.mailbox.publish(w.envelope), { id: w.envelope.id, state: "queued", durability: "file-and-inbox-fsync",
+    delivery: acceptedMessageDelivery(w.envelope.messageId, "mailbox-queued") });
   const before = readFileSync(file(w), "utf8"), ino = lstatSync(file(w)).ino;
   assert.equal(lstatSync(file(w)).mode & 0o777, 0o600);
   assert.equal(lstatSync(file(w)).nlink, 1);
@@ -117,17 +119,18 @@ test("temporary and unknown files are retained and counted, but never decoded", 
 
 test("entry, byte, scan and batch limits fail closed without eviction", t => {
   const w = setup(t, { limits: { entries: 1 } }); w.mailbox.publish(w.envelope);
-  assert.throws(() => w.mailbox.publish({ ...w.envelope, id: uuid() }), /full/);
+  const id = uuid();
+  assert.throws(() => w.mailbox.publish({ ...w.envelope, id, messageId: id }), /full/);
   assert.equal(w.mailbox.publish(w.envelope).state, "duplicate");
   const b = setup(t, { limits: { bytes: 1 } }); assert.throws(() => b.mailbox.publish(b.envelope), /full/);
   const s = setup(t, { limits: { scan: 1 } }); s.mailbox.inbox();
   writeFileSync(join(s.mailbox.directory, "a"), "", { mode: 0o600 });
   assert.throws(() => s.mailbox.inbox(), /scan bound/);
   const many = setup(t);
-  for (let i = 0; i < 17; i++) many.mailbox.publish({ ...many.envelope, id: uuid() });
+  for (let i = 0; i < 17; i++) { const id = uuid(); many.mailbox.publish({ ...many.envelope, id, messageId: id }); }
   assert.equal(many.mailbox.inbox().messages.length, 16); assert.equal(many.mailbox.inbox().truncated, true);
   const large = setup(t);
-  for (let i = 0; i < 5; i++) large.mailbox.publish({ ...large.envelope, id: uuid(), text: "x".repeat(30000) });
+  for (let i = 0; i < 5; i++) { const id = uuid(); large.mailbox.publish({ ...large.envelope, id, messageId: id, text: "x".repeat(30000) }); }
   assert.equal(large.mailbox.inbox().messages.length, 4); assert.equal(large.mailbox.inbox().truncated, true);
   for (const limits of [{ entries: 1001 }, { scan: Infinity }, { bytes: 0 }])
     assert.throws(() => new FileMailbox(w.root, w.to, w.store, server, { limits }));
@@ -136,7 +139,7 @@ test("entry, byte, scan and batch limits fail closed without eviction", t => {
 test("bounded cursor pages advance beyond processed/quiet head entries without consuming evidence", t => {
   const w = setup(t);
   const ids = Array.from({ length: 37 }, (_, i) => `00000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`);
-  for (const id of ids) w.mailbox.publish({ ...w.envelope, id });
+  for (const id of ids) w.mailbox.publish({ ...w.envelope, id, messageId: id });
   const first = w.mailbox.page(), second = w.mailbox.page(first.next), third = w.mailbox.page(second.next);
   assert.deepEqual([first.messages.length, second.messages.length, third.messages.length], [16, 16, 5]);
   assert.deepEqual([...first.messages, ...second.messages, ...third.messages].map(e => e.id), ids);
@@ -277,9 +280,10 @@ test("unrecognized data saturates admission and is not deleted", t => {
 
 test("concurrent different-ID writers retain all admitted messages", async t => {
   const w = setup(t);
-  const outcomes = await Promise.all(Array.from({ length: 4 }, () => child(w, {
-    envelope: { ...w.envelope, id: uuid() },
-  })));
+  const outcomes = await Promise.all(Array.from({ length: 4 }, (_, i) => {
+    const id = `00000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`;
+    return child(w, { envelope: { ...w.envelope, id, messageId: id } });
+  }));
   assert.ok(outcomes.every(r => r.result?.state === "queued" || r.error === "busy"));
   assert.equal(w.mailbox.inbox().messages.length, outcomes.filter(r => r.result?.state === "queued").length);
   assert.ok(w.mailbox.inbox().messages.length > 0);
@@ -294,9 +298,10 @@ test("concurrent same-ID writers never replace; different IDs obey shared capaci
   assert.ok(results.every(r => r.result?.state === "queued" || r.result?.state === "duplicate" || ["busy", "conflict"].includes(r.error)));
   assert.equal(w.mailbox.inbox().messages.length, 1); assert.equal(lstatSync(file(w)).nlink, 1);
   const limited = setup(t, { limits: { entries: 1 } });
-  const outcomes = await Promise.all(Array.from({ length: 6 }, () => child(limited, {
-    envelope: { ...limited.envelope, id: uuid() }, limits: { entries: 1 }, pause: "written",
-  })));
+  const outcomes = await Promise.all(Array.from({ length: 6 }, (_, i) => {
+    const id = `00000000-0000-0000-0000-${String(i + 101).padStart(12, "0")}`;
+    return child(limited, { envelope: { ...limited.envelope, id, messageId: id }, limits: { entries: 1 }, pause: "written" });
+  }));
   assert.equal(outcomes.filter(r => r.result?.state === "queued").length, 1);
   assert.equal(limited.mailbox.inbox().entries, 1);
 });

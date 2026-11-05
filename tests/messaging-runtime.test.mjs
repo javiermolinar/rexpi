@@ -39,7 +39,8 @@ async function setup(t, options = {}) {
   const mailbox = new FileMailbox(a.root, owner, a.store, own.server);
   const f = { ...a, sm, holds, own, owner, childBinding, child, sent, timers, pi, m, mailbox,
     advance(ms) { now += ms; },
-    envelope(ticket, overrides = {}) { return { ...makeEnvelope(child, owner, ticket.requestId, "result", "Review finding"), ...overrides }; },
+    envelope(ticket, overrides = {}) { return { ...makeEnvelope(child, owner, ticket.requestId, "result", "Review finding", undefined,
+      { runId: ticket.runId, runtimeId: ticket.runtimeId, inReplyTo: ticket.messageId }), ...overrides }; },
   };
   f.register = async () => {
     const ticket = await m.prepareReturn();
@@ -90,6 +91,12 @@ test("questions/results batch once as visible untrusted followUp after actual pe
   assert.equal(f.sent[0].message.details.receipts.length, 2);
   assert.equal(f.m.snapshot().enqueueRequested, 2); assert.equal(f.m.snapshot().processingConfirmed, false);
   assert.equal(f.mailbox.inbox().messages.length, 2, "no dequeue or deletion");
+  for (const e of f.mailbox.inbox().messages) {
+    const delivery = f.m.messageDelivery(e.messageId);
+    assert.equal(delivery.state, "accepted"); assert.equal(delivery.acceptance, "accepted");
+    assert.equal(delivery.delivery, "unknown"); assert.equal(delivery.processing, "unknown");
+    assert.equal(delivery.settlement, "unknown");
+  }
 });
 
 test("busy, pending SDK input, editor text, explicit pending input and extension UI hold dispatch", async t => {
@@ -104,6 +111,9 @@ test("busy, pending SDK input, editor text, explicit pending input and extension
     f.m.uiPrompt(false); f.m.inputPending(false);
     Object.assign(f.holds, { busy: false, pending: false, editor: "" });
     await f.m.poll(); assert.equal(f.sent.length, 1, hold);
+    const delivery = f.m.messageDelivery(f.mailbox.inbox().messages[0].messageId);
+    assert.equal(delivery.state, "accepted", hold); assert.equal(delivery.delivery, "unknown", hold);
+    assert.equal(delivery.processing, "unknown", hold); assert.equal(delivery.settlement, "unknown", hold);
   }
 });
 
@@ -263,6 +273,7 @@ test("each request spends at most sixteen actionable attempts; page cursor reach
   // Deterministic lexical UUIDs: the first sixteen entries are unrelated/quiet.
   for (let i = 1; i <= 36; i++) f.mailbox.publish(f.envelope(ticket, {
     id: `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`,
+    messageId: `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`,
     requestId: i <= 16 ? "unrelated" : ticket.requestId,
     kind: i <= 16 ? "progress" : "result",
   }));
@@ -343,11 +354,15 @@ test("server replacement during an import's native peer check cannot schedule", 
 });
 
 test("send uses local file transport once and validates exact live recipient", async t => {
-  const f = await setup(t), params = { to: f.child, requestId: "explicit-send", kind: "result", text: "findings", id: uuid() };
+  const f = await setup(t), params = { to: f.child, requestId: "explicit-send", runId: uuid(), runtimeId: uuid(),
+    inReplyTo: uuid(), kind: "result", text: "findings", id: uuid() };
   const result = await f.m.send(params); assert.equal(result.state, "queued");
+  assert.equal(result.delivery.state, "accepted"); assert.equal(result.delivery.delivery, "unknown");
+  assert.equal(result.delivery.processing, "unknown"); assert.equal(result.delivery.settlement, "unknown");
   const inbox = new FileMailbox(f.root, f.child, f.store, f.own.server).inbox();
   assert.equal(inbox.messages.length, 1); assert.equal(inbox.messages[0].id, params.id);
-  assert.equal(digest(inbox.messages[0]), digest(makeEnvelope(f.owner, f.child, params.requestId, params.kind, params.text, params.id)));
+  assert.equal(digest(inbox.messages[0]), digest(makeEnvelope(f.owner, f.child, params.requestId, params.kind, params.text, params.id,
+    { runId: params.runId, runtimeId: params.runtimeId, inReplyTo: params.inReplyTo })));
   assert.equal((await f.m.send(params)).state, "queued", "same runtime returns cached outcome, not a second publication");
   assert.equal(f.sent.length, 0, "transport send never wakes the sender's model");
 });
@@ -358,7 +373,8 @@ test("pending sends are fenced by abort/off/branch revocation even without a too
     const f = await setup(t, { runtime: { mailbox: () => ({ page: () => ({ messages: [] }), publish(e) {
       publications++; return { id: e.id, state: "queued", durability: "file-and-inbox-fsync" };
     } }) } });
-    const params = { to: f.child, requestId: "explicit-send", kind: "result", text: "finding", id: uuid() };
+    const params = { to: f.child, requestId: "explicit-send", runId: uuid(), runtimeId: uuid(),
+      inReplyTo: uuid(), kind: "result", text: "finding", id: uuid() };
     f.w.onTerminalData = block => {
       if (block !== f.child.blockId) return;
       if (mode === "abort") f.m.settled(true);
@@ -377,11 +393,33 @@ test("send verifies owned source/peer, bounds envelopes and never retries unknow
   const f = await setup(t, { runtime: { mailbox: () => ({ page: () => ({ messages: [] }), publish(e) {
     publications++; return { id: e.id, state: "unknown", durability: "unknown" };
   } }) } });
-  const params = { to: f.child, requestId: "explicit-send", kind: "result", text: "finding", id: uuid() };
+  const params = { to: f.child, requestId: "explicit-send", runId: uuid(), runtimeId: uuid(),
+    inReplyTo: uuid(), kind: "result", text: "finding", id: uuid() };
   const a = await f.m.send(params), b = await f.m.send(params);
   assert.deepEqual(a, b); assert.equal(publications, 1);
+  assert.equal(a.delivery.state, "unknown"); assert.equal(a.delivery.delivery, "unknown");
+  assert.equal(f.m.messageDelivery(params.id).state, "unknown");
   await assert.rejects(f.m.send({ ...params, text: "conflict" }), /Conflicting/);
   assert.throws(() => f.m.send({ ...params, id: uuid(), text: "x".repeat(33000) }));
   f.store.remove(f.child.conversationId, f.child.token);
   await assert.rejects(f.m.send({ ...params, id: uuid() })); assert.equal(publications, 1);
+});
+
+test("replies cannot expand request, run, runtime, parent message, route or generation scope", async t => {
+  const f = await setup(t), ticket = await f.register(), accepted = f.envelope(ticket);
+  f.mailbox.publish(accepted); await f.m.poll(); assert.equal(f.sent.length, 1);
+  assert.equal(f.mailbox.publish({ ...accepted, at: accepted.at + 1 }).state, "duplicate");
+  await f.m.poll(); assert.equal(f.sent.length, 1, "an exact retry adds no SDK work");
+  const fresh = changes => {
+    const id = uuid(); return f.envelope(ticket, { id, messageId: id, ...changes });
+  };
+  for (const changes of [{ requestId: "other-authorized-scope" }, { runId: uuid() }, { runtimeId: uuid() },
+    { inReplyTo: uuid() }, { inReplyTo: null }]) f.mailbox.publish(fresh(changes));
+  assert.throws(() => f.mailbox.publish({ ...accepted, requestId: "expanded-scope" }), /different content/);
+  await f.m.poll(); await f.m.poll();
+  assert.equal(f.sent.length, 1); assert.equal(intents(f).length, 1);
+  assert.equal(f.m.snapshot().attempted, 1, "unauthorized correlation is not an attempted reply");
+  f.m.detach(); f.m.attach(f.ctx); f.m.enable();
+  f.mailbox.publish(f.envelope(ticket)); await f.m.poll();
+  assert.equal(f.sent.length, 1, "a stale runtime/generation cannot rearm the original reply");
 });

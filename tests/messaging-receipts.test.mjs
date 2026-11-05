@@ -116,8 +116,8 @@ test("bounded batches reject progress, wrong recipient, duplicates and bytes bey
   const f = fixture(t);
   for (const items of [[], [f.e, f.e], [{ ...f.e, kind: "progress" }],
     [{ ...f.e, to: { ...f.owner, token: uuid() } }],
-    Array.from({ length: 17 }, () => ({ ...f.e, id: uuid() })),
-    Array.from({ length: 5 }, () => ({ ...f.e, id: uuid(), text: "x".repeat(30000) }))])
+    Array.from({ length: 17 }, () => { const id = uuid(); return { ...f.e, id, messageId: id }; }),
+    Array.from({ length: 5 }, () => { const id = uuid(); return { ...f.e, id, messageId: id, text: "x".repeat(30000) }; })])
     await assert.rejects(f.ledger.reserveFollowup(items));
   assert.equal(f.ledger.inspect(f.e), "new");
 });
@@ -150,7 +150,7 @@ test("corrupt receipt records fail closed; a foreign Pi session never grants or 
   assert.throws(() => f.ledger.inspect(f.e));
   const g = fixture(t), foreign = { ...g.owner, piSessionId: uuid() };
   const data = { version: 1, owner: foreign, nonce: uuid(), receipts: [{ logicalId: g.e.id, requestId: g.e.requestId,
-    digest: "0".repeat(64) }] };
+    runId: g.e.runId, runtimeId: g.e.runtimeId, inReplyTo: g.e.inReplyTo, digest: "0".repeat(64) }] };
   g.sm.appendCustomEntry(FOLLOWUP_INTENT, data);
   assert.equal(g.ledger.inspect(g.e), "new");
 });
