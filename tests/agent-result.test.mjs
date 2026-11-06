@@ -74,6 +74,65 @@ test("a successful response without completion is pending, not a terminal outcom
   assert.equal(f.agent.events(f.handle).events.at(-1).lifecycle.result, "pending");
 });
 
+test("bounded waiting observes explicit completion and then reuses the terminal result", async () => {
+  const f = fixture(), original = f.reader.agentResult.bind(f.reader);
+  f.reader.agentResult = async received => {
+    const response = await original(received);
+    if (f.reader.calls >= 2) response.completion = makeCompletion(f.handle);
+    return response;
+  };
+  const result = await f.agent.waitForResult(f.handle, f.source, 1000);
+  assert.equal(result.state, "ready"); assert.equal(result.outcome, "completed");
+  assert.equal(f.reader.calls, 2);
+  assert.equal(await f.agent.waitForResult(f.handle, f.source, 1000), result);
+  assert.equal(f.reader.calls, 2, "terminal evidence triggers no further reads");
+});
+
+test("wait deadlines preserve pending evidence and settlement alone is not completion", async () => {
+  const f = fixture();
+  f.agent.observe(f.handle, { type: "activity.settled" });
+  const result = await f.agent.waitForResult(f.handle, f.source, 20);
+  assert.equal(result.state, "pending"); assert.equal(result.evidence, "current");
+  assert.equal(result.completion, undefined); assert.equal(f.reader.calls, 1);
+  assert.equal(f.agent.events(f.handle).events.at(-1).lifecycle.activity, "settled");
+  assert.equal(f.agent.events(f.handle).events.at(-1).lifecycle.result, "pending");
+});
+
+test("unknown results and caller aborts do not wait or schedule more reads", async () => {
+  const unknown = fixture(); unknown.reader.failure = new Error("transport disconnected");
+  const result = await unknown.agent.waitForResult(unknown.handle, unknown.source, 1000);
+  assert.equal(result.state, "unknown"); assert.equal(unknown.reader.calls, 1);
+
+  const aborted = fixture(), controller = new AbortController(), original = aborted.reader.agentResult.bind(aborted.reader);
+  aborted.reader.agentResult = async received => { const response = await original(received); controller.abort(); return response; };
+  await assert.rejects(aborted.agent.waitForResult(aborted.handle, aborted.source, 1000, controller.signal));
+  assert.equal(aborted.reader.calls, 1);
+});
+
+test("a stuck initial provider read is bounded and returns unknown without retained evidence", async () => {
+  const f = fixture();
+  f.reader.agentResult = async function () {
+    this.calls++;
+    await new Promise((resolve, reject) => {
+      const signal = arguments[1];
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  };
+  const result = await f.agent.waitForResult(f.handle, f.source, 20);
+  assert.equal(result.state, "unknown"); assert.match(result.readError, /wait deadline exceeded/);
+  assert.equal(result.evidence, "retained"); assert.equal(f.reader.calls, 1);
+});
+
+test("wait bounds and handle authority are validated before remote work", async () => {
+  const f = fixture();
+  for (const waitMs of [-1, 0.5, 30_001])
+    await assert.rejects(f.agent.waitForResult(f.handle, f.source, waitMs), /Invalid agent result wait bound/);
+  await assert.rejects(f.agent.waitForResult(makeHandle(), f.source, 10), /Unknown, foreign, or ambiguous/);
+  await assert.rejects(f.agent.waitForResult(f.handle, { ...f.source, taskId: uuid() }, 10), /related task/);
+  assert.equal(f.reader.calls, 0);
+});
+
 test("transport loss, detach, exit, and replacement are unknown without retained completion", async () => {
   const f = fixture();
   assert.equal((await f.agent.result(f.handle, f.source)).state, "pending");
@@ -221,8 +280,10 @@ test("rexpi_agent_result uses the authenticated provider, recovers explicitly, a
     () => ({ runtime: f.child.runtime, peer: f.child.peer, agent: f.child.agent }));
   assert.deepEqual([...parentTools.keys()], ["rexpi_agent_complete", "rexpi_agent_result", "rexpi_agent_cancel", "rexpi_agent_stop",
     "rexpi_agent_status", "rexpi_agent_events"]);
-  const read = tools => tools.get("rexpi_agent_result").execute("result", { handle }, undefined, undefined,
+  const read = (tools, waitMs) => tools.get("rexpi_agent_result").execute("result",
+    { handle, ...(waitMs === undefined ? {} : { waitMs }) }, undefined, undefined,
     tools === parentTools ? f.parent.ctx : f.child.ctx);
+  assert.equal(parentTools.get("rexpi_agent_result").parameters.properties.waitMs.maximum, 30_000);
 
   assert.equal((await read(parentTools)).details.state, "pending");
   f.child.peer.detach();
@@ -233,6 +294,7 @@ test("rexpi_agent_result uses the authenticated provider, recovers explicitly, a
   const ready = await read(parentTools);
   assert.equal(ready.details.state, "ready"); assert.deepEqual(ready.details.completion, completion);
   assert.equal(JSON.parse(ready.content[0].text).state, "ready");
+  assert.deepEqual((await read(parentTools, 1000)).details, ready.details, "terminal waits reuse retained evidence");
   await assert.rejects(read(childTools), /remote handle/);
   await assert.rejects(f.child.peer.agentResult(handle), /Invalid or ambiguous peer target/);
 

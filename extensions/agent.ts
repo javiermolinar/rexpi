@@ -4,7 +4,7 @@ import { AGENT_HANDLE_VERSION, type AgentHandle } from "../lib/agent.ts";
 import { AgentRuntime, MAX_AGENT_COMPLETION_ARTIFACT_BYTES, MAX_AGENT_COMPLETION_ARTIFACTS,
   MAX_AGENT_COMPLETION_ERROR_CODE_BYTES, MAX_AGENT_COMPLETION_ERROR_DETAILS_BYTES,
   MAX_AGENT_COMPLETION_ERROR_MESSAGE_BYTES, MAX_AGENT_COMPLETION_SUMMARY_BYTES, MAX_AGENT_CURSOR_BYTES,
-  MAX_AGENT_EVENT_PAGE_SIZE } from "../lib/agent-runtime.ts";
+  MAX_AGENT_EVENT_PAGE_SIZE, MAX_AGENT_RESULT_WAIT_MS } from "../lib/agent-runtime.ts";
 import type { PeerRuntime } from "../lib/peer.ts";
 import { requireFeature, type Runtime } from "../lib/runtime.ts";
 
@@ -64,13 +64,16 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
   });
   pi.registerTool({
     name: "rexpi_agent_result", label: "Retrieve agent result",
-    description: "Read the explicit result for one exact agent handle.",
+    description: "Read one exact agent result, optionally waiting for pending evidence.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    parameters: Type.Object({ handle }, { additionalProperties: false }),
+    parameters: Type.Object({ handle, waitMs: Type.Optional(Type.Integer({ minimum: 0,
+      maximum: MAX_AGENT_RESULT_WAIT_MS, description: "Bounded wait for pending evidence; default 0 (immediate)." })) },
+      { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       const sessionId = ctx.sessionManager.getSessionId(), source = current();
       const agent = active(sessionId), own = source.runtime!.snapshot();
-      const details = await agent.result(params.handle, own.state, signal);
+      const details = params.waitMs ? await agent.waitForResult(params.handle, own.state, params.waitMs, signal)
+        : await agent.result(params.handle, own.state, signal);
       return { content: [{ type: "text", text: JSON.stringify(details) }], details };
     },
   });

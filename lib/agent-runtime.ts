@@ -24,6 +24,8 @@ export const MAX_AGENT_COMPLETION_ERROR_MESSAGE_BYTES = 2048;
 export const MAX_AGENT_COMPLETION_ERROR_DETAILS_BYTES = 4096;
 export const MAX_AGENT_COMPLETION_BYTES = 16 * 1024;
 export const MAX_AGENT_RESULT_BYTES = 20 * 1024;
+export const MAX_AGENT_RESULT_WAIT_MS = 30_000;
+const AGENT_RESULT_WAIT_POLL_MS = 100;
 export const MAX_AGENT_CANCELLATION_BYTES = 4096;
 export const MAX_AGENT_STOP_BYTES = 4096;
 
@@ -206,6 +208,15 @@ function bound(value: number | undefined, fallback: number, maximum: number, lab
 function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error))
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").slice(0, 256);
+}
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, ms);
+    const abort = () => { clearTimeout(timer); signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new Error("Agent result wait aborted")); };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
 }
 function completionText(value: unknown, maximum: number, label: string): string {
   if (typeof value !== "string" || !value.trim().length) throw new Error(label + " must be a nonblank string");
@@ -744,6 +755,34 @@ export class AgentRuntime {
     current.completion = completion;
     current.retainedResult = retained;
     return retained;
+  }
+
+  /** Bounded exact-handle reads. Unknown evidence returns immediately; waiting never infers a result. */
+  async waitForResult(value: unknown, source: Identity, waitMs: number, signal?: AbortSignal): Promise<AgentResult> {
+    if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > MAX_AGENT_RESULT_WAIT_MS)
+      throw new Error("Invalid agent result wait bound");
+    if (waitMs === 0) return this.result(value, source, signal);
+    const handle = parseAgentHandle(value), current = this.exact(handle), local = parseIdentity(source);
+    if (handle.taskId !== local.taskId || handle.conversationId === local.conversationId)
+      throw new Error("Agent result requires a remote handle in the same related task");
+    const deadline = Date.now() + waitMs, timeout = AbortSignal.timeout(waitMs);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    let last: AgentResult | undefined;
+    try {
+      for (;;) {
+        last = await this.result(handle, local, combined);
+        if (last.state !== "pending" && last.state !== "cancelling") return last;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return last;
+        await pause(Math.min(AGENT_RESULT_WAIT_POLL_MS, remaining), combined);
+        if (Date.now() >= deadline) return last;
+      }
+    } catch (error) {
+      if (!timeout.aborted || signal?.aborted) throw error;
+      if (current.retainedResult) return current.retainedResult;
+      if (last) return last;
+      return this.unknownResult(current, new Error("Agent result wait deadline exceeded"), false);
+    }
   }
 
   private cancellationSnapshot(current: RunRecord, state: AgentCancellationState,

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add optional bounded `waitMs` retrieval to `rexpi_agent_result`, with abortable exact-handle reads for pending evidence, immediate terminal/unknown results, and no completion inference from settlement or deadlines.
 - Expose exact delegation and fan-out handles in model-visible output, add bounded join outcome projections with clipped summaries, and add opt-in cached agent handles and lifecycle states to `rexpi_inspect` without native or peer reads.
 - Rename every model-facing `rex_*` tool to `rexpi_*`, including capability grants and delegated return-route instructions. Expand the injected Rexpi guidance to explain Rex multiplexer control and supervised subagent orchestration, replace terse tool descriptions with concise functional text, and consolidate lifecycle guidance in the shared prompt.
 - Reject stale mailbox-worker page schemas, fall back to bounded synchronous read-only decoding, and isolate pending outcomes by worker so retirement cannot reject fresh publishes or trigger publish replay.

@@ -224,13 +224,15 @@ The lifecycle tools are:
 | `rexpi_agent_status` | Read binding, activity, delivery, and result observations for one exact handle. |
 | `rexpi_agent_events` | Page retained observations and stop/cancellation records; this does not probe the endpoint or trigger work. |
 | `rexpi_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome; a delegated child's tool binds its bootstrap handle and correlation internally. |
-| `rexpi_agent_result` | Read the related child's explicit completion, or report `pending`, `cancelling`, or `unknown`. |
+| `rexpi_agent_result` | Read the related child's explicit completion, optionally waiting for pending evidence, or report `pending`, `cancelling`, or `unknown`. |
 | `rexpi_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
 | `rexpi_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |
 
 **The status axes are independent.** `binding` describes created/bound/unknown/exited/replaced endpoint evidence. `activity` distinguishes non-idle (`running`), an instantaneous idle sample, and correlated agent-end settlement; none proves model processing or completion. `pendingInput` is only the last pending-message sample. `delivery` concerns a requested settlement notification: accepted delivery proves neither parent processing nor completion and is never retracted. `result` changes only on explicit result evidence or an explicit cancellation/unknown observation. Conversation history, activity, delivery, cancellation, stop, and result evidence do not imply one another.
 
 Results are not inferred from idle, settlement, exit, replacement, launch, or delivery. `pending` means the current target explicitly reported no completion; `unknown` means evidence is unavailable or ambiguous. `ready`, `failed`, and `cancelled` include only an explicit retained completion. `resultAvailable` reflects that local explicit completion, not remote liveness. Once retained, a terminal result survives later stop, disconnect, exit, or replacement evidence.
+
+`rexpi_agent_result` accepts an optional `waitMs` from 0 to 30,000; omitting it or passing 0 preserves an immediate read. Positive waits perform bounded exact-handle reads while evidence is `pending` or `cancelling`. Terminal and `unknown` results return immediately. A deadline returns the last pending evidence, or `unknown` if the initial read produced none. Caller abort stops further reads without launching, cancelling, or cleaning up work.
 
 Cancellation outcomes are also narrow. `requested` records no acknowledgement; `acknowledged` means only that Pi abort was requested for verified busy work, **not** that work is quiescent or has a cancelled result. `settled` means no abort was needed for idle, settled, exited, or explicitly terminal work. `unknown` covers abort-throw, post-write loss, and replacement races. Cancellation is deduplicated and never automatically retried; later explicit completed/failed/cancelled evidence remains admissible.
 
