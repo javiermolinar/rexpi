@@ -8,8 +8,6 @@
 
 **Pi tools for [Rex](https://www.superlogical.com/rex): parallel agents, terminal panes, project switching, and review handoffs.**
 
-Rexpi is the Pi extension; Rex is the terminal multiplexer it controls. Every model-facing tool uses the `rexpi_` prefix. These tools open terminal and Pi panes, connect related conversations, and supervise subagents through delegation, fan-out, messaging, and explicit results. Use them for Rex control or subagent coordination when no more specific tool applies; ordinary local work does not require Rexpi.
-
 From the author of [pi-cmux](https://github.com/javiermolinar/pi-cmux).
 
 Tiny arms, many panes.
@@ -32,6 +30,7 @@ But it comes with batteries included. There are commands and shortcuts too; you 
 
 - **Your tools, where you want them.** Add custom commands to open Helix, Hunk, logs, or whatever else you keep running in splits, tabs, and floating panes.
 - **Agents that report back.** Ask for a fresh review and request the findings back. Related agents can exchange messages, and opted-in review results come back to the parent conversation automatically. No copy-paste courier service required.
+- **Coordinator workflows that stay inspectable.** Delegate and fan out supervised subagents with visible handles, bounded result waits, compact status and inbox output, and quiet completion. Use `verbose:true` for full evidence and bounded text projection for oversized conversations.
 - **Live conversation access.** Explicitly read a related Pi's active branch or compacted context, or send it an attributed peer message with steering/follow-up delivery. No terminal scraping or saved-session parsing.
 - **Projects by name.** Open an existing project by path or let zoxide find it. Start a fresh Pi there without changing your current conversation's directory.
 - **Find the agent you lost.** Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes. The seventh tab was not, in fact, the last one.
@@ -125,7 +124,7 @@ Both Pi instances must run the current Rexpi extension in verified local Rex ter
 }
 ```
 
-Pages contain at most 100 entries and 48 KiB. Raw reads reject an individual raw entry over 48 KiB. `textOnly:true` instead bounds projected text per entry and adds `textTruncated:true` when clipping occurs, preserving entry IDs and continuation. Pass the returned `next` value as `cursor` for the next page. Head cursors move forward and tail cursors move backward. A cursor is bound to the target session, leaf, view, direction, since entry, filters, and projection, so restart after the conversation or query changes.
+Pages contain at most 100 entries and 48 KiB. Raw reads reject oversized raw entries; `textOnly:true` instead clips projected text and marks it with `textTruncated:true`. Pass the returned `next` value as `cursor` for the next page. Head cursors move forward and tail cursors move backward. A cursor is bound to the target session, leaf, view, direction, since entry, filters, and projection, so restart after the conversation or query changes.
 
 `rexpi_peer_message_send` accepts `target`, `requestId`, `runId`, `runtimeId`, `kind`, `text`, `delivery` (`steer` or `followUp`), `triggerTurn`, optional `inReplyTo`, and an optional stable UUID `id`. Text is capped at 32,768 characters, and the complete attributed envelope and transport request must fit 32 KiB and 40 KiB respectively; multibyte text reaches those byte limits before the character cap. It injects an attributed custom message, never a user-role message. `accepted` means the target extension accepted the API call; it does not confirm processing or completion. Failed or uncertain sends are not automatically retried.
 
@@ -167,8 +166,6 @@ These are application-level tool grants, not an OS sandbox. Explicitly granting 
 
 Exact logical-ID retries return the original delegation outcome without launching again. Changed tasks, grants, routes, subscription options, or the literal parent cwd conflict instead. `inspect`, `status`, `result`, `cancel`, and `stop` use the original handle and existing agent controls; stale or uncertain evidence never causes an automatic relaunch, resend, cleanup, or handle switch.
 
-Delegation text output includes the exact agent handle. Fan-out and join text output includes bounded per-child projections with handles, states, and completion summaries. Long summaries and errors are clipped; artifacts, repeated correlation fields, and full evidence remain in `details`.
-
 `rexpi_fanout` accepts 1–64 explicit children, each with its own batch-local `id`, `task`, `grant`, and optional settlement subscription. The same child ID in another fan-out identifies independent work. Exact retries compare the raw caller inputs; capability-attenuated grants are derived only when admitting new work. `concurrency` limits in-flight launches to 1–8. Dispatch stops on rejection, uncertain creation/binding, cancellation, or authority revocation. Already-dispatched handles and their evidence are preserved; there is no automatic refill after failure, restart, or cleanup.
 
 ```json
@@ -209,8 +206,6 @@ The call returns a `fanoutId` and a bounded join snapshot. `rexpi_join` with tha
 
 Delegation, fan-out, and join registries are bounded and retained in memory across extension reinitialization, not across process restart. They are inspection and recovery fences, not durable scheduling or liveness guarantees.
 
-`rexpi_inspect` accepts `includeAgents:true` to add cached agent handles, lifecycle states, and result availability. This projection uses retained local evidence only and performs no native process or peer reads.
-
 ### Supervised agent lifecycle
 
 Every **related** `rexpi_start_pi` launch now returns a versioned, token-free `handle` in its `LaunchResult`. Protocol-safe launch IDs are preserved as its `requestId`; other legacy launcher IDs receive deterministic `launch:<sha256>` correlation. The remaining fields correlate the task, child conversation, runtime, run, message, and endpoint generation. The launcher registers the identical handle in the parent, passes it in a separate strictly validated bootstrap value, and the child registers that same value after checking it against the decoded child identity. Independent launches return no handle.
@@ -223,18 +218,14 @@ The lifecycle tools are:
 |---|---|
 | `rexpi_agent_status` | Read binding, activity, delivery, and result observations for one exact handle. |
 | `rexpi_agent_events` | Page retained observations and stop/cancellation records; this does not probe the endpoint or trigger work. |
-| `rexpi_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome and terminate the current tool batch; the exact local child's `agent_end` quietly disarms its capability deadline. A delegated child's tool binds its bootstrap handle and correlation internally. |
-| `rexpi_agent_result` | Read the related child's explicit completion, optionally waiting for pending evidence, or report `pending`, `cancelling`, or `unknown`. |
+| `rexpi_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome; a delegated child's tool binds its bootstrap handle and correlation internally. |
+| `rexpi_agent_result` | Read the related child's explicit completion, or report `pending`, `cancelling`, or `unknown`. |
 | `rexpi_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
 | `rexpi_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |
-
-Status, result, and event tools return compact model-visible text by default, omitting repeated notices and duplicate correlation fields. Pass `verbose:true` for the original full output; `details` always retains complete evidence. `rexpi_message_inbox` follows the same pattern: its default projection contains message IDs, correlation, sanitized previews, delivery state, and pagination, while `verbose:true` includes endpoints, digests, observations, and notices. Omit `after` or pass an empty string for the first inbox page; use the returned `next` UUID for later pages, and reject invalid cursors without triggering work.
 
 **The status axes are independent.** `binding` describes created/bound/unknown/exited/replaced endpoint evidence. `activity` distinguishes non-idle (`running`), an instantaneous idle sample, and correlated agent-end settlement; none proves model processing or completion. `pendingInput` is only the last pending-message sample. `delivery` concerns a requested settlement notification: accepted delivery proves neither parent processing nor completion and is never retracted. `result` changes only on explicit result evidence or an explicit cancellation/unknown observation. Conversation history, activity, delivery, cancellation, stop, and result evidence do not imply one another.
 
 Results are not inferred from idle, settlement, exit, replacement, launch, or delivery. `pending` means the current target explicitly reported no completion; `unknown` means evidence is unavailable or ambiguous. `ready`, `failed`, and `cancelled` include only an explicit retained completion. `resultAvailable` reflects that local explicit completion, not remote liveness. Once retained, a terminal result survives later stop, disconnect, exit, or replacement evidence.
-
-`rexpi_agent_result` accepts an optional `waitMs` from 0 to 30,000; omitting it or passing 0 preserves an immediate read. Positive waits perform bounded exact-handle reads while evidence is `pending` or `cancelling`. Terminal and `unknown` results return immediately. A deadline returns the last pending evidence, or `unknown` if the initial read produced none. Caller abort stops further reads without launching, cancelling, or cleaning up work.
 
 Cancellation outcomes are also narrow. `requested` records no acknowledgement; `acknowledged` means only that Pi abort was requested for verified busy work, **not** that work is quiescent or has a cancelled result. `settled` means no abort was needed for idle, settled, exited, or explicitly terminal work. `unknown` covers abort-throw, post-write loss, and replacement races. Cancellation is deduplicated and never automatically retried; later explicit completed/failed/cancelled evidence remains admissible.
 
@@ -257,39 +248,6 @@ Cancellation outcomes are also narrow. `requested` records no acknowledgement; `
 Stale, foreign, self, miscorrelated, and ambiguous-runtime requests have no shutdown effect. Concurrent and repeated calls share retained outcomes, and the child independently deduplicates the provider so shutdown is invoked at most once for that handle, including after an unknown outcome. Stop never kills or aborts a process, calls `Runtime.stop`, detaches or cleans up resources, restarts, retries, marks surviving work cancelled, or withdraws accepted messages/results. Normal later Pi `session_shutdown` may close peer resources; retained in-memory bindings and outcome evidence remain subject to their normal lifecycle.
 
 Evidence is deliberately bounded and in memory: at most 64 runs and 256 events per run are retained, event pages contain at most 100 events and 48 KiB, and oversized completion/status/result/stop records are rejected. Evicted cursors and replaced generations fail rather than silently retargeting. This is not persistent storage or a liveness guarantee across process restart. Settlement notifications retain their existing opt-in behavior; stop and result reads do not send notifications, change `returnResults`, or start model work.
-
-## Coordinator smoke checks
-
-Run these commands from the repository root (for example `/Users/javimolina/pi-rex`):
-
-```sh
-npm test
-npm run test:orchestration
-npm run test:agents-ui
-```
-
-Each command writes full test output to a timestamped log under the system temporary directory and prints only the test counts and log path on success. Failure output is printed in full.
-
-For a deterministic live delegation, use a fresh coordinator and delegate one child with `returnResults:true`, `turns:2`, and tools `rexpi_message_send` plus `rexpi_agent_complete`. Use this exact child task:
-
-```text
-Send the exact result text `route-ok` through the issued result route,
-then record completion with summary `delegate-ok`. Do not perform other work.
-```
-
-Verify the model-visible handle, an explicit `ready/completed` result from `rexpi_agent_result` with `waitMs:30000`, and the `route-ok` inbox preview. Queued or accepted delivery is not processing; use the retained completion for the outcome.
-
-The orchestration closure categories are:
-
-- **F1:** explicit child completion is consumed by join.
-- **F2:** settlement and delivery remain independent of completion.
-- **F3:** stop uses the real authorization contract without fabricated exit evidence.
-- **F4:** capability-attenuated exact retries preserve identity without relaunching.
-- **F5:** equal child IDs in distinct fan-out batches remain independent.
-- **F6:** delegation identity binds the literal parent cwd.
-- **F7:** agent hierarchy, filtering, status badges, and narrow-width rendering preserve evidence and selection.
-
-These names refer to closure categories, not separate test scripts. The live smoke procedure should also check current model-visible handle/outcome projections and the compact `verbose:false` responses.
 
 ## Configure
 
