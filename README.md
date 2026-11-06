@@ -68,6 +68,8 @@ pi -e ./extensions/index.ts
 
 Leave out `[task]` for an empty conversation. These launch commands don't enable automatic result returns; ask Pi to delegate and send findings back for that.
 
+The `rexpi_start_pi` tool follows the same rule: omit `prompt` only when you want an idle interactive session. For supervised work, use `rexpi_delegate`, which requires a task and an explicit capability grant instead of creating empty review sessions.
+
 | Shortcut | What it does |
 |---|---|
 | **Ctrl+Alt+A** | Open the agent panel |

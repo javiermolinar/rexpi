@@ -38,7 +38,7 @@ import { registerFanoutTools } from "./fanout.ts";
 import { registerDelegationTool } from "./delegation.ts";
 
 const schema = Type.Object({
-  prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Optional initial task." })),
+  prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Initial task; omit for idle." })),
   cwd: Type.Optional(Type.String({ description: "Existing local directory; mutually exclusive with project." })),
   project: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Project path or zoxide query; mutually exclusive with cwd." })),
   placement: Type.Optional(literalUnion(LAUNCH_PLACEMENTS,
@@ -244,7 +244,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         }
         toolApi.registerTool({
           name: "rexpi_start_pi", label: "Start Pi in Rex",
-          description: "Start a fresh Pi in a Rex session, split, or tab, with no history transfer.",
+          description: "Start fresh Pi in Rex. Omit prompt for idle; use rexpi_delegate for tasks.",
           executionMode: "sequential", parameters: schema,
           async execute(id, params, signal, _update, toolCtx) {
             const sourceLauncher = launcher, sourceRuntime = runtime, sourceMessaging = messaging;

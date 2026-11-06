@@ -133,13 +133,30 @@ test("concurrent reservation and abort cannot duplicate scheduling intent", asyn
   assert.equal(g.ledger.inspect(g.e), "reserved", "uncertain attempt remains memory-fenced");
 });
 
-test("hidden disk-only intent, oversized entries and huge in-memory trees fail closed", async t => {
+test("ordinary image entries over 1 MiB remain confirmable within the total history bound", async t => {
+  const f = fixture(t);
+  f.sm.appendMessage({
+    role: "toolResult", toolCallId: "image-read", toolName: "read",
+    content: [{ type: "text", text: "Read image file [image/png]" },
+      { type: "image", data: Buffer.alloc(1024 * 1024, 7).toString("base64"), mimeType: "image/png" }],
+    isError: false, timestamp: Date.now(),
+  });
+  await f.ledger.confirm();
+  await f.ledger.reserveFollowup([f.e]);
+  assert.equal(f.ledger.inspect(f.e), "reserved");
+});
+
+test("in-memory histories over the total byte bound fail before storage confirmation", async t => {
+  const f = fixture(t);
+  f.sm.getEntries = () => [{ id: "oversized-history", type: "custom", data: "x".repeat(32 * 1024 * 1024) }];
+  await assert.rejects(f.ledger.confirm(), /32 MiB/);
+});
+
+test("hidden disk-only intent and huge in-memory trees fail closed", async t => {
   const f = fixture(t), path = f.sm.getSessionFile();
   appendFileSync(path, JSON.stringify({ type: "custom", id: "hidden", parentId: f.sm.getLeafId(), timestamp: "now",
     customType: FOLLOWUP_INTENT, data: {} }) + "\n");
   await assert.rejects(f.ledger.confirm(), /differs/);
-  const g = fixture(t); g.sm.appendCustomEntry("oversized", "x".repeat(1024 * 1024));
-  await assert.rejects(g.ledger.confirm(), /entries/);
   const h = fixture(t); h.sm.getEntries = () => new Array(100001);
   assert.throws(() => h.ledger.inspect(h.e), /bound/); await assert.rejects(h.ledger.confirm(), /bound/);
 });
@@ -153,4 +170,10 @@ test("corrupt receipt records fail closed; a foreign Pi session never grants or 
     runId: g.e.runId, runtimeId: g.e.runtimeId, inReplyTo: g.e.inReplyTo, digest: "0".repeat(64) }] };
   g.sm.appendCustomEntry(FOLLOWUP_INTENT, data);
   assert.equal(g.ledger.inspect(g.e), "new");
+  const h = fixture(t);
+  h.sm.appendCustomEntry(FOLLOWUP_INTENT, { version: 1, owner: h.owner, nonce: uuid(), receipts: [{
+    logicalId: h.e.id, requestId: h.e.requestId, runId: h.e.runId, runtimeId: h.e.runtimeId,
+    inReplyTo: h.e.inReplyTo, digest: "0".repeat(64), unexpected: "x".repeat(1024 * 1024),
+  }] });
+  assert.throws(() => h.ledger.inspect(h.e), /Unexpected or missing follow-up receipt fields/);
 });

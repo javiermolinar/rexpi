@@ -74,6 +74,22 @@ test("project launches retain opt-in result returns and explicit session placeme
   assert.equal(result.returnSetup.state, "registered");
   assert.deepEqual(f.counts(), { prepared: 1, registered: 1 });
 });
+test("result-return launch accepts ordinary image entries over 1 MiB", async t => {
+  const f = await setup(t);
+  f.sm.appendMessage({
+    role: "toolResult", toolCallId: "image-read", toolName: "read",
+    content: [{ type: "text", text: "Read image file [image/png]" },
+      { type: "image", data: Buffer.alloc(1024 * 1024, 7).toString("base64"), mimeType: "image/png" }],
+    isError: false, timestamp: Date.now(),
+  });
+  f.w.onCreate = args => f.ack(args);
+  const result = await f.launcher.launch("image-history", opts, f.root);
+  assert.equal(result.creation, "confirmed");
+  assert.equal(result.startup.state, "bound");
+  assert.equal(result.returnSetup.state, "registered");
+  assert.deepEqual(f.counts(), { prepared: 1, registered: 1 });
+});
+
 test("failed project lookup revokes only its return ticket; conflicting inputs never prepare one", async t => {
   const f = await setup(t), other = await f.m.prepareReturn();
   f.config.resolveProject = async () => { throw Error("project not found"); };

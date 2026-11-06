@@ -20,7 +20,6 @@ export interface History {
   getEntries(): readonly unknown[];
 }
 const MAX_HISTORY_BYTES = 32 * 1024 * 1024;
-const MAX_ENTRY_BYTES = 1024 * 1024;
 const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
 function fileStat(s: Stats): void {
   // Pi creates ordinary session files using the user's umask (commonly 0644).
@@ -47,10 +46,12 @@ async function ancestors(file: string): Promise<Map<string, Stats>> {
 function entryMap(entries: readonly unknown[]): Map<string, string> {
   if (entries.length > 100_000) throw new Error("Session entry bound exceeded");
   const result = new Map<string, string>();
+  let totalBytes = 0;
   for (const raw of entries) {
     const e = record(raw), body = JSON.stringify(e);
-    if (typeof e.id !== "string" || !e.id || result.has(e.id) || Buffer.byteLength(body) > MAX_ENTRY_BYTES)
-      throw new Error("Invalid session entries");
+    if (typeof e.id !== "string" || !e.id || result.has(e.id)) throw new Error("Invalid session entries");
+    totalBytes += Buffer.byteLength(body);
+    if (totalBytes > MAX_HISTORY_BYTES) throw new Error("Session history exceeds 32 MiB");
     result.set(e.id, body);
   }
   return result;
@@ -81,7 +82,7 @@ export async function persistedEntries(file: string, sessionId: string, expected
       let end: number;
       while ((end = pending.indexOf("\n")) >= 0) {
         const line = pending.slice(0, end); pending = pending.slice(end + 1);
-        if (!line || Buffer.byteLength(line) > MAX_ENTRY_BYTES) throw new Error("Invalid/oversized session entry");
+        if (!line) throw new Error("Invalid session entry");
         const e = record(JSON.parse(line));
         if (!header) {
           if (e.type !== "session" || e.version !== 3 || e.id !== sessionId) throw new Error("Session owner/version changed");
@@ -94,7 +95,6 @@ export async function persistedEntries(file: string, sessionId: string, expected
         }
         if (++lines % 64 === 0) await yieldTurn();
       }
-      if (Buffer.byteLength(pending) > MAX_ENTRY_BYTES) throw new Error("Session entry exceeds confirmation bound");
     }
     pending += decoder.decode();
     if (pending || !header || found.size !== expected.size) throw new Error("Intent is not confirmed in persisted session history");
