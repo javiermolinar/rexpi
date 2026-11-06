@@ -67,7 +67,7 @@ export class CapabilityRuntime {
   private readonly controller = new AbortController();
   private readonly onNotice?: (message: string) => void;
   private timer: CapabilityTimer | undefined;
-  private state: "active" | "expired" | "revoked" = "active";
+  private state: "active" | "completed" | "expired" | "revoked" = "active";
   private context: CapabilityContext | undefined;
   private turnsStarted = 0;
   private turnLimitDenied = false;
@@ -115,9 +115,18 @@ export class CapabilityRuntime {
   }
 
   private inactiveDenial(): ToolGateResult {
+    if (this.state === "completed") return blocked("Capability grant already completed; future work is denied");
     return blocked(this.state === "expired"
       ? "Capability grant expired; current and future work is denied"
       : "Capability grant was revoked; this incarnation has no tool authority");
+  }
+
+  /** Explicit agent completion disarms the deadline quietly; it is not revocation or an abort. */
+  finish(): void {
+    if (this.state !== "active") return;
+    this.state = "completed";
+    if (this.timer) this.clock.clearTimeout(this.timer);
+    this.timer = undefined;
   }
 
   private expire(): void {
@@ -177,6 +186,7 @@ export class CapabilityRuntime {
   /** Called at Pi's actual turn_start boundary, not at agent_start or message construction. */
   startTurn(context: CapabilityContext): boolean {
     this.attachContext(context);
+    if (this.state === "completed") { this.abortCurrent(); return false; }
     const wasActive = this.state === "active";
     if (!this.ensureActive()) {
       // ensureActive aborts a newly expired context; already inactive incarnations need it too.

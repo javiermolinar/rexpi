@@ -86,6 +86,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   let joinRuntime: JoinRuntime | undefined;
   let messaging: MessagingRuntime | undefined;
   let capability: CapabilityRuntime | undefined;
+  let localAgentHandle: AgentHandle | undefined;
   let capabilityContext: ExtensionContext | undefined;
   let capabilityFailure: string | undefined;
   let peer: PeerRuntime | undefined;
@@ -109,7 +110,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const extension = fileURLToPath(import.meta.url);
   const stop = () => {
     activation++; agents.cancel(); worktrees.cancel();
-    capability?.revoke(); capabilityContext = undefined;
+    capability?.revoke(); capabilityContext = undefined; localAgentHandle = undefined;
     messaging?.detach(); messaging = undefined;
     agentRuntime.detach();
     peer?.detach(); peer = undefined;
@@ -179,6 +180,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (agentSeed) {
         agentRuntime.register(agentSeed, { notifyParentOnSettlement: notifyAgentSettlement });
         agentRuntime.observe(agentSeed, { type: "binding.verified" });
+        localAgentHandle = agentSeed;
       }
       const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
       launcher = new Launcher(active, { extension, agentDirectory, stateDirectory, messaging,
@@ -296,6 +298,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       peer?.observeAgentEnd(ctx);
       // Local Pi settlement may schedule I/O, but this hook never awaits delivery or starts model work itself.
       agentRuntime.observeLocalSettlement(own.state);
+      if (localAgentHandle && agentRuntime.hasCompletion(localAgentHandle)) capability?.finish();
     } catch { /* stale or unverified contexts provide no settlement evidence */ }
   });
   pi.on("before_agent_start", (event) => {

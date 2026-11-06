@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { runAgentLoop } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   AgentRuntime,
   MAX_AGENT_COMPLETION_ARTIFACT_BYTES,
@@ -271,10 +273,77 @@ test("rexpi_agent_complete is sequential and fenced to the verified source sessi
   orientation = { version: 1, ...source };
   const result = await tool.execute("call-2", params, undefined, undefined, ctx);
   assert.equal(result.details.outcome, "completed");
+  assert.equal(result.terminate, true);
   assert.deepEqual(JSON.parse(result.content[0].text), result.details);
   assert.equal((await runtime.status(handle)).resultAvailable, true);
   const eventId = runtime.events(handle).latestEventId;
   const retry = await tool.execute("call-3", params, undefined, undefined, ctx);
   assert.strictEqual(retry.details, result.details);
   assert.equal(runtime.events(handle).latestEventId, eventId);
+});
+
+test("a successful completion terminates Pi's agent loop without a second model request", async () => {
+  const { runtime, handle, source } = tracked();
+  const tools = new Map();
+  registerAgentTools({ registerTool(definition) { tools.set(definition.name, definition); } },
+    () => ({ runtime: { snapshot: () => ({ state: { version: 1, ...source } }) }, peer: {}, agent: runtime }));
+  const definition = tools.get("rexpi_agent_complete");
+  const ctx = { sessionManager: { getSessionId: () => source.piSessionId } };
+  const tool = { ...definition,
+    execute: (id, params, signal, onUpdate) => definition.execute(id, params, signal, onUpdate, ctx) };
+  const response = (content, stopReason) => {
+    const stream = createAssistantMessageEventStream();
+    stream.end({ role: "assistant", content, api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason, timestamp: Date.now() });
+    return stream;
+  };
+  let requests = 0;
+  const streamFn = () => {
+    requests++;
+    if (requests === 1) return response([{ type: "toolCall", id: "complete-once", name: "rexpi_agent_complete",
+      arguments: { handle, ...completion(handle) } }], "toolUse");
+    return response([{ type: "text", text: "unexpected second request" }], "stop");
+  };
+  await runAgentLoop([{ role: "user", content: "Finish once", timestamp: Date.now() }],
+    { messages: [], tools: [tool] }, { model: { provider: "test" }, convertToLlm: messages => messages },
+    () => {}, undefined, streamFn);
+  assert.equal(requests, 1, "terminate:true suppresses the follow-up model turn");
+  assert.equal((await runtime.status(handle)).resultAvailable, true);
+});
+
+test("a mixed tool batch continues without prematurely finishing the capability", async () => {
+  const { runtime, handle, source } = tracked();
+  const tools = new Map();
+  registerAgentTools({ registerTool(definition) { tools.set(definition.name, definition); } },
+    () => ({ runtime: { snapshot: () => ({ state: { version: 1, ...source } }) }, peer: {}, agent: runtime }));
+  const definition = tools.get("rexpi_agent_complete"), ctx = { sessionManager: { getSessionId: () => source.piSessionId } };
+  const completionTool = { ...definition,
+    execute: (id, params, signal, onUpdate) => definition.execute(id, params, signal, onUpdate, ctx) };
+  const sibling = { name: "ordinary_tool", label: "Ordinary", description: "Ordinary sibling",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    async execute() { return { content: [{ type: "text", text: "done" }], details: {}, terminate: false }; } };
+  const response = (content, stopReason) => {
+    const stream = createAssistantMessageEventStream();
+    stream.end({ role: "assistant", content, api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason, timestamp: Date.now() });
+    return stream;
+  };
+  let requests = 0;
+  const streamFn = () => {
+    requests++;
+    if (requests === 1) return response([
+      { type: "toolCall", id: "complete-mixed", name: "rexpi_agent_complete", arguments: { handle, ...completion(handle) } },
+      { type: "toolCall", id: "ordinary-mixed", name: "ordinary_tool", arguments: {} },
+    ], "toolUse");
+    return response([{ type: "text", text: "required mixed-batch continuation" }], "stop");
+  };
+  await runAgentLoop([{ role: "user", content: "Finish mixed batch", timestamp: Date.now() }],
+    { messages: [], tools: [completionTool, sibling] }, { model: { provider: "test" }, convertToLlm: messages => messages },
+    () => {}, undefined, streamFn);
+  assert.equal(requests, 2, "a sibling without terminate:true requires the normal next model turn");
+  assert.equal((await runtime.status(handle)).resultAvailable, true);
 });

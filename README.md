@@ -223,7 +223,7 @@ The lifecycle tools are:
 |---|---|
 | `rexpi_agent_status` | Read binding, activity, delivery, and result observations for one exact handle. |
 | `rexpi_agent_events` | Page retained observations and stop/cancellation records; this does not probe the endpoint or trigger work. |
-| `rexpi_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome; a delegated child's tool binds its bootstrap handle and correlation internally. |
+| `rexpi_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome and terminate the current tool batch; the exact local child's `agent_end` quietly disarms its capability deadline. A delegated child's tool binds its bootstrap handle and correlation internally. |
 | `rexpi_agent_result` | Read the related child's explicit completion, optionally waiting for pending evidence, or report `pending`, `cancelling`, or `unknown`. |
 | `rexpi_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
 | `rexpi_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |

@@ -642,7 +642,8 @@ export class AgentRuntime {
     }
   }
 
-  /** Synchronous retained evidence for local presentation; never performs a peer read. */
+  /** Synchronous exact-handle evidence for local presentation and run-end cleanup; never performs a peer read. */
+  hasCompletion(value: unknown): boolean { return this.exact(value).completion !== undefined; }
   cachedStatuses(): readonly AgentStatus[] {
     return [...this.runs.values()].map(current => this.snapshot(current, "retained"));
   }

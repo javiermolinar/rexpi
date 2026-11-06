@@ -28,7 +28,7 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
   };
   pi.registerTool({
     name: "rexpi_agent_complete", label: "Record local agent completion",
-    description: "Record this subagent's explicit completed, failed, or cancelled outcome.",
+    description: "Record this subagent's explicit outcome and terminate the current tool batch.",
     executionMode: "sequential",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
@@ -59,7 +59,7 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
         ...(params.artifacts === undefined ? {} : { artifacts: params.artifacts }),
         ...(params.error === undefined ? {} : { error: params.error }),
       });
-      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      return { content: [{ type: "text", text: JSON.stringify(details) }], details, terminate: true };
     },
   });
   pi.registerTool({
