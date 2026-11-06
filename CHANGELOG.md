@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+- Allow image-heavy Pi histories in result-return setup by replacing the incompatible 1 MiB per-entry limit with a 32 MiB aggregate bound, and clarify idle `rexpi_start_pi` sessions versus required-task `rexpi_delegate` work.
 
 - Bound text-only conversation projections per entry with truncation markers and working continuation while preserving raw-read rejection, and treat omitted or empty inbox cursors as the same first page.
 - Compact model-visible agent status/result/event and inbox responses by default, with `verbose:true` for full correlation and notices, and add log-backed test commands plus a deterministic coordinator smoke procedure.

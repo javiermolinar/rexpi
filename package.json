@@ -1,6 +1,6 @@
 {
   "name": "@javimolina/rexpi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Tiny arms, many panes. A Pi extension for Rex to multiplex the world.",
   "repository": {
     "type": "git",
