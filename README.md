@@ -167,6 +167,8 @@ These are application-level tool grants, not an OS sandbox. Explicitly granting 
 
 Exact logical-ID retries return the original delegation outcome without launching again. Changed tasks, grants, routes, subscription options, or the literal parent cwd conflict instead. `inspect`, `status`, `result`, `cancel`, and `stop` use the original handle and existing agent controls; stale or uncertain evidence never causes an automatic relaunch, resend, cleanup, or handle switch.
 
+Delegation text output includes the exact agent handle. Fan-out and join text output includes bounded per-child projections with handles, states, and completion summaries. Long summaries and errors are clipped; artifacts, repeated correlation fields, and full evidence remain in `details`.
+
 `rexpi_fanout` accepts 1–64 explicit children, each with its own batch-local `id`, `task`, `grant`, and optional settlement subscription. The same child ID in another fan-out identifies independent work. Exact retries compare the raw caller inputs; capability-attenuated grants are derived only when admitting new work. `concurrency` limits in-flight launches to 1–8. Dispatch stops on rejection, uncertain creation/binding, cancellation, or authority revocation. Already-dispatched handles and their evidence are preserved; there is no automatic refill after failure, restart, or cleanup.
 
 ```json
@@ -206,6 +208,8 @@ Exact logical-ID retries return the original delegation outcome without launchin
 The call returns a `fanoutId` and a bounded join snapshot. `rexpi_join` with that ID rereads evidence without launching work. Child outcomes are `succeeded`, `failed`, `cancelled`, `unknown`, or `not-dispatched`; the aggregate is `succeeded`, `failed`, `cancelled`, `unknown`, or `partial`. Pending, cancelling, stale, disconnected, and unavailable results remain `unknown`. A coordinator interruption returns current evidence with `coordinator:"interrupted"`; it never fabricates completion or duplicates work. Explicit partial joins can be refreshed, while terminal joins are cached. Joined output retains every child and is capped at 2 MiB.
 
 Delegation, fan-out, and join registries are bounded and retained in memory across extension reinitialization, not across process restart. They are inspection and recovery fences, not durable scheduling or liveness guarantees.
+
+`rexpi_inspect` accepts `includeAgents:true` to add cached agent handles, lifecycle states, and result availability. This projection uses retained local evidence only and performs no native process or peer reads.
 
 ### Supervised agent lifecycle
 

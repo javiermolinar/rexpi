@@ -152,6 +152,8 @@ test("rexpi_delegate tool preserves task and options through the existing compos
   assert.ok(f.w.created[0].at(-1).startsWith("Task:\n" + task));
   assert.ok(f.w.created[0].includes("--thinking")); assert.ok(f.w.created[0].includes("high"));
   assert.match(result.content[0].text, /activity unknown; result pending/);
+  const visible = JSON.parse(result.content[0].text.slice(result.content[0].text.indexOf("\n") + 1));
+  assert.deepEqual(visible.handle, result.details.handle, "model-visible text contains the exact launch handle");
   assert.equal(JSON.stringify(result.details).includes("token"), false);
   assert.deepEqual(await tool.execute("tool-delegation", input, undefined, undefined, f.ctx), result);
   current = { cache: f.cache };

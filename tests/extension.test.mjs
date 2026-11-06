@@ -60,6 +60,7 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.equal(f.tools.get("rexpi_start_pi").executionMode, "sequential");
   assert.ok(f.tools.has("rexpi_return_to_parent"));
   assert.ok(f.tools.has("rexpi_inspect"));
+  assert.ok(f.tools.get("rexpi_inspect").parameters.properties.includeAgents);
   assert.ok(f.tools.has("rexpi_message_control"));
   assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
   assert.deepEqual(f.shortcuts.map(s => s.key), ["ctrl+alt+m", "ctrl+alt+b", "ctrl+alt+a"]);
@@ -570,6 +571,23 @@ test("inspection replaces identity/status commands and follows current state wit
   }
   f.events.get("session_shutdown")({}, f.ctx);
   await assert.rejects(inspect(), /No verified/);
+});
+test("inspection projects a registered related-launch handle without new native reads", async t => {
+  const f = fixture(t);
+  await f.events.get("session_start")({}, f.ctx);
+  f.w.onCreate = args => {
+    const assignment = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
+    const seed = decodeBootstrap(assignment.slice(assignment.indexOf("=") + 1));
+    new BindingStore(join(f.root, "bindings")).write(binding(seed, { blockId: f.w.next.blockId }));
+  };
+  const launch = await f.tools.get("rexpi_start_pi").execute("inspect-agent",
+    { prompt: "inspect this child", related: true, focus: false }, undefined, undefined, f.ctx);
+  const before = f.w.calls.length;
+  const inspected = await f.tools.get("rexpi_inspect").execute("inspect", { includeAgents: true }, undefined, undefined, f.ctx);
+  assert.deepEqual(inspected.details.agents.map(agent => agent.handle), [launch.details.handle]);
+  assert.equal(inspected.details.agents[0].lifecycle.result, "pending");
+  assert.equal(inspected.details.agents[0].evidence, "retained");
+  assert.equal(f.w.calls.length, before);
 });
 test("direct messaging stop requires no model and remains usable while busy, idempotent and inert after shutdown", async t => {
   const f = fixture(t);

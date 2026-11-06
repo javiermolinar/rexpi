@@ -2,11 +2,32 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { CapabilityRuntime } from "../lib/capability-runtime.ts";
 import type { FanoutExecution, FanoutRegistry, FanoutRuntime } from "../lib/fanout.ts";
-import type { JoinRuntime } from "../lib/join.ts";
+import type { JoinOutcome, JoinRuntime } from "../lib/join.ts";
+import type { AgentResult } from "../lib/agent-runtime.ts";
 import type { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { requireFeature, type Runtime } from "../lib/runtime.ts";
 import type { Identity } from "../lib/state.ts";
 import { capabilityGrant } from "./grants.ts";
+import { boundedJson, clippedText } from "./presentation.ts";
+
+const MAX_JOIN_PRESENTATION_BYTES = 256 * 1024;
+function resultPresentation(result: AgentResult) {
+  const completion = result.completion;
+  return { state: result.state, evidence: result.evidence,
+    ...(result.outcome ? { outcome: result.outcome } : {}),
+    ...(completion ? { summary: clippedText(completion.summary),
+      ...(completion.error ? { error: { ...(completion.error.code ? { code: clippedText(completion.error.code, 128) } : {}),
+        message: clippedText(completion.error.message) } } : {}) } : {}),
+    ...(result.readError ? { readError: clippedText(result.readError) } : {}) };
+}
+function joinText(fanoutId: string, outcome: JoinOutcome): string {
+  const children = outcome.children.map(child => ({ id: child.id, state: child.state,
+    ...(child.handle ? { handle: child.handle } : {}),
+    ...(child.result ? { result: resultPresentation(child.result) } : {}),
+    ...(child.error ? { error: clippedText(child.error, 1024) } : {}) }));
+  return boundedJson({ fanoutId, state: outcome.state, coordinator: outcome.coordinator,
+    completed: outcome.completed, children }, MAX_JOIN_PRESENTATION_BYTES, "Join");
+}
 
 export interface FanoutToolState {
   runtime?: Runtime;
@@ -57,8 +78,7 @@ export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolS
           ...(source.capability || signal ? { signal: source.capability?.toolSignal(signal) ?? signal } : {}) }, inputs);
       }
       const details = await join.join(execution, origin(execution, source.runtime), signal);
-      return { content: [{ type: "text", text: `Fan-out ${id}: ${details.state}; ${details.children.length} child outcomes.` }],
-        details: { fanoutId: id, ...details } };
+      return { content: [{ type: "text", text: joinText(id, details) }], details: { fanoutId: id, ...details } };
     },
   });
   pi.registerTool({
@@ -74,7 +94,7 @@ export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolS
       const own = source.runtime;
       if (own && own.snapshot().state.piSessionId !== ctx.sessionManager.getSessionId()) throw new Error("Pi source conversation changed");
       const details = await source.join.join(execution, origin(execution, own), signal);
-      return { content: [{ type: "text", text: `Join ${params.fanoutId}: ${details.state}; ${details.children.length} child outcomes.` }],
+      return { content: [{ type: "text", text: joinText(params.fanoutId, details) }],
         details: { fanoutId: params.fanoutId, ...details } };
     },
   });

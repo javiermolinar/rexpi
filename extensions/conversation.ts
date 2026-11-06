@@ -2,8 +2,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { requireFeature, type Runtime } from "../lib/runtime.ts";
 import type { MessagingRuntime } from "../lib/messaging/runtime.ts";
+import type { AgentRuntime, AgentStatus } from "../lib/agent-runtime.ts";
+import { boundedJson, clippedText } from "./presentation.ts";
 
-export interface ConversationState { runtime?: Runtime; messaging?: MessagingRuntime }
+const MAX_AGENT_INSPECTION_BYTES = 128 * 1024;
+function agentPresentation(status: AgentStatus) {
+  return { handle: status.handle, lifecycle: status.lifecycle, resultAvailable: status.resultAvailable,
+    evidence: status.evidence, ...(status.readError ? { readError: clippedText(status.readError) } : {}) };
+}
+
+export interface ConversationState { runtime?: Runtime; messaging?: MessagingRuntime;
+  agent?: Pick<AgentRuntime, "cachedStatuses"> }
 
 /** Register only after verified Rex activation. Identity remains evidence, never authority. */
 export function registerConversationTools(pi: ExtensionAPI, current: () => ConversationState): void {
@@ -25,13 +34,17 @@ export function registerConversationTools(pi: ExtensionAPI, current: () => Conve
     name: "rexpi_inspect", label: "Inspect Rexpi state",
     description: "Read local Rexpi identity, parent/child relationships, and messaging status.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    parameters: Type.Object({}, { additionalProperties: false }),
-    async execute(_id, _params, signal, _update, ctx) {
+    parameters: Type.Object({ includeAgents: Type.Optional(Type.Boolean({
+      description: "Include retained agent handles and lifecycle states; default false." })) }, { additionalProperties: false }),
+    async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();
-      const { runtime, messaging } = current();
+      const { runtime, messaging, agent } = current();
       const active = requireFeature(runtime, runtime, ctx.sessionManager.getSessionId());
       const own = active.snapshot();
-      const details = { ...own.state, blockId: own.blockId, children: active.childStatus(), messaging: messaging?.snapshot() };
+      const agents = params.includeAgents ? agent?.cachedStatuses().map(agentPresentation) : undefined;
+      if (agents) boundedJson(agents, MAX_AGENT_INSPECTION_BYTES, "Agent inspection");
+      const details = { ...own.state, blockId: own.blockId, children: active.childStatus(), messaging: messaging?.snapshot(),
+        ...(agents ? { agents } : {}) };
       return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
     },
   });

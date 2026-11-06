@@ -22,9 +22,11 @@ function fixture() {
         subscription: { settlement: false }, launch: { origin: source } };
     },
     async result(value) {
-      const state = states.get(value.requestId) ?? "pending";
+      const configured = states.get(value.requestId) ?? "pending";
+      const state = typeof configured === "string" ? configured : configured.state;
+      const completion = typeof configured === "string" ? undefined : configured.completion;
       return { handle: value, runtimeId: value.runtimeId, runId: value.runId, requestId: value.requestId,
-        state, evidence: "current", notice: "fixture" };
+        state, ...(completion ? { outcome: completion.outcome, completion } : {}), evidence: "current", notice: "fixture" };
     },
   };
   const fanout = new FanoutRuntime(delegation, registry), join = new JoinRuntime(delegation, joinCache);
@@ -41,11 +43,27 @@ test("rexpi_fanout and rexpi_join refresh partial outcomes without relaunching",
   const first = await f.tools.get("rexpi_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
   assert.equal(first.details.fanoutId, "fanout-tool"); assert.equal(first.details.state, "unknown");
   assert.deepEqual(first.details.children.map(child => child.state), ["unknown", "unknown"]);
+  const firstVisible = JSON.parse(first.content[0].text);
+  assert.equal(firstVisible.fanoutId, "fanout-tool");
+  assert.deepEqual(firstVisible.children.map(child => child.handle), first.details.children.map(child => child.handle));
+  assert.deepEqual(firstVisible.children.map(child => child.result.state), ["pending", "pending"]);
+  assert.equal(first.content[0].text.includes("fixture"), false, "repeated notices stay out of model-visible projections");
   assert.equal(f.launches.length, 2);
-  f.states.set("one", "ready"); f.states.set("two", "failed");
+  const summary = "visible summary " + "🙂".repeat(600);
+  f.states.set("one", { state: "ready", completion: { outcome: "completed", summary, artifacts: ["details-only-artifact"] } });
+  f.states.set("two", "failed");
   const joined = await f.tools.get("rexpi_join").execute("join-tool", { fanoutId: "fanout-tool" }, undefined, undefined, ctx);
   assert.equal(joined.details.state, "partial"); assert.equal(joined.details.completed, true);
   assert.deepEqual(joined.details.children.map(child => child.state), ["succeeded", "failed"]);
+  const joinedVisible = JSON.parse(joined.content[0].text);
+  assert.deepEqual(joinedVisible.children.map(child => child.state), ["succeeded", "failed"]);
+  assert.deepEqual(joinedVisible.children.map(child => child.handle), joined.details.children.map(child => child.handle));
+  assert.equal(joinedVisible.children[0].result.outcome, "completed");
+  assert.ok(joinedVisible.children[0].result.summary.endsWith("…"));
+  assert.ok(joinedVisible.children[0].result.summary.length < summary.length);
+  assert.equal(joined.details.children[0].result.completion.summary, summary, "full evidence remains in details");
+  assert.equal(joined.content[0].text.includes("details-only-artifact"), false);
+  assert.ok(Buffer.byteLength(joined.content[0].text) <= 256 * 1024);
   f.current = { registry: f.registry, join: f.join };
   const repeated = await f.tools.get("rexpi_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
   assert.deepEqual(repeated.details, joined.details, "exact existing fan-out needs no replacement runtime or capability");

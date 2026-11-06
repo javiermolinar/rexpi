@@ -5,6 +5,7 @@ import type { DelegationCache, DelegationRuntime } from "../lib/delegation.ts";
 import type { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { requireFeature, type Runtime } from "../lib/runtime.ts";
 import { capabilityGrant } from "./grants.ts";
+import { boundedJson } from "./presentation.ts";
 import { LAUNCH_PLACEMENTS, THINKING, literalUnion } from "./schemas.ts";
 
 export interface DelegationToolState {
@@ -59,8 +60,9 @@ export function registerDelegationTool(pi: ExtensionAPI, current: () => Delegati
         return delegation.compose(id, task, { ...admitted, grant }, ctx.cwd,
           source.capability?.toolSignal(signal) ?? signal);
       });
-      return { content: [{ type: "text", text: `Delegation ${details.creation}/${details.binding}; activity unknown; result pending.` }],
-        details };
+      const text = `Delegation ${details.creation}/${details.binding}; activity unknown; result pending.\n`
+        + boundedJson({ handle: details.handle }, 4096, "Delegation");
+      return { content: [{ type: "text", text }], details };
     },
   });
 }

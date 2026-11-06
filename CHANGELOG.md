@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Expose exact delegation and fan-out handles in model-visible output, add bounded join outcome projections with clipped summaries, and add opt-in cached agent handles and lifecycle states to `rexpi_inspect` without native or peer reads.
 - Rename every model-facing `rex_*` tool to `rexpi_*`, including capability grants and delegated return-route instructions. Expand the injected Rexpi guidance to explain Rex multiplexer control and supervised subagent orchestration, replace terse tool descriptions with concise functional text, and consolidate lifecycle guidance in the shared prompt.
 - Reject stale mailbox-worker page schemas, fall back to bounded synchronous read-only decoding, and isolate pending outcomes by worker so retirement cannot reject fresh publishes or trigger publish replay.
 - Close orchestration review findings: delegated children receive a bootstrap-bound explicit-completion tool and one-shot settlement opt-in, high-level grants require `rexpi_agent_complete`, stop uses the real authorization contract, fan-out retries hash raw inputs and namespace child IDs by batch, delegation binds parent cwd, and outer-width layouts reserve activity, result, and native-status evidence before parent/title text.

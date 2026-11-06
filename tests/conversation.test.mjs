@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { registerConversationTools } from "../extensions/conversation.ts";
 import { childBootstrap } from "../lib/state.ts";
-import { active, binding, identity, rid, server } from "./fixtures.mjs";
+import { active, binding, identity, rid, server, uuid } from "./fixtures.mjs";
 
 async function setup(t, parent = identity()) {
   const seed = childBootstrap(parent, true, "chat", server);
@@ -56,4 +56,31 @@ test("a root conversation cannot return and inspection does not invent a parent"
   assert.equal(result.details.origin, undefined);
   assert.equal(result.details.messaging, undefined);
   assert.equal(f.w.focusCalls ?? 0, 0);
+});
+
+test("opt-in agent inspection exposes cached handles and result state without native or peer reads", async t => {
+  const f = await active(t), who = identity("chat");
+  const handle = { version: 1, taskId: who.taskId, conversationId: who.conversationId, runtimeId: uuid(), runId: uuid(),
+    requestId: "inspect-child", messageId: uuid(), endpointGeneration: 1 };
+  const status = { handle, runtimeId: handle.runtimeId, runId: handle.runId, requestId: handle.requestId,
+    lifecycle: { binding: "bound", activity: "settled", delivery: "accepted", result: "ready" },
+    pendingInput: false, resultAvailable: true, evidence: "retained", readError: "🙂".repeat(600), notice: "details-only-notice" };
+  let cachedReads = 0;
+  const agent = { cachedStatuses() { cachedReads++; return [status]; } };
+  const tools = new Map();
+  registerConversationTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime: f.runtime, agent }));
+  const inspect = params => tools.get("rexpi_inspect").execute("inspect", params, undefined, undefined, f.ctx);
+  const before = f.w.calls.length;
+  assert.equal((await inspect({})).details.agents, undefined);
+  assert.equal((await inspect({ includeAgents: false })).details.agents, undefined);
+  assert.equal(cachedReads, 0);
+  const result = await inspect({ includeAgents: true });
+  assert.equal(cachedReads, 1);
+  assert.equal(result.details.agents.length, 1);
+  assert.deepEqual(result.details.agents[0].handle, handle);
+  assert.equal(result.details.agents[0].lifecycle.result, "ready");
+  assert.equal(result.details.agents[0].resultAvailable, true);
+  assert.ok(result.details.agents[0].readError.endsWith("…"));
+  assert.equal(result.content[0].text.includes("details-only-notice"), false);
+  assert.equal(f.w.calls.length, before, "inspection adds no native process or peer probes");
 });

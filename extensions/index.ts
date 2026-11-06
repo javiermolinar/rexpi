@@ -261,7 +261,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         });
         registerMessageSend(toolApi, () => messaging);
         registerMessagingControls(toolApi, () => ({ runtime, messaging }));
-        registerConversationTools(toolApi, () => ({ runtime, messaging }));
+        registerConversationTools(toolApi, () => ({ runtime, messaging, agent: agentRuntime }));
         registerPeerTools(toolApi, () => ({ runtime, peer }));
         registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime, localAgentHandle: agentSeed }));
         registerDelegationTool(toolApi, () => ({ runtime, delegation, messaging, capability, cache: delegationCalls }));
