@@ -17,7 +17,7 @@ function fixture() {
   const delegation = {
     async delegate(id, task, options) {
       launches.push({ id, task, options });
-      const value = handle(id);
+      const value = handle(task.replace(/^task /, ""));
       return { handle: value, creation: "confirmed", binding: "bound", activity: "unknown", result: "pending",
         subscription: { settlement: false }, launch: { origin: source } };
     },
@@ -65,6 +65,23 @@ test("fan-out cancellation returns interrupted child evidence without launching 
   assert.equal(f.launches.length, 0);
   await assert.rejects(f.tools.get("rex_join").execute("missing", { fanoutId: "missing" }, undefined, undefined, ctx),
     /Unknown fan-out logical ID/);
+});
+
+test("capability-attenuated exact retries use raw caller identity without deriving or launching again", async () => {
+  const f = fixture(); let derived = 0;
+  f.current = { ...f.current, capability: {
+    deriveChildGrant(value) { derived++; return { ...value, readPaths: value.readPaths.map(path => "/repo/" + path) }; },
+    toolSignal: signal => signal ?? new AbortController().signal,
+  } };
+  const params = { children: [input("one")], concurrency: 1 };
+  const first = await f.tools.get("rex_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
+  const repeated = await f.tools.get("rex_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
+  assert.deepEqual(repeated.details, first.details);
+  assert.equal(derived, 1);
+  assert.equal(f.launches.length, 1);
+  await assert.rejects(f.tools.get("rex_fanout").execute("attenuated-repeat",
+    { children: [input("one", "changed")], concurrency: 1 }, undefined, undefined, ctx), /Conflicting fan-out logical ID/);
+  assert.equal(f.launches.length, 1);
 });
 
 test("all child grants are attenuated before any fan-out launch", async () => {

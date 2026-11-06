@@ -194,9 +194,10 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
   }
   dispose(): void { this.closed = true; }
 
-  private rowLines(row: Row, width: number, lastAgent: boolean): string[] {
+  private rowLines(row: Row, width: number, lastAgent: boolean, outerWidth = width): string[] {
     const s = this.style, selected = row.key === this.selectedRow()?.key;
-    const name = agentText(this.view.name(row)), state = this.view.status(row), status = s.status(state.tone, agentText(state.text));
+    const name = agentText(this.view.name(row)), state = this.view.status(row);
+    const stateText = agentText(state.text), status = s.status(state.tone, stateText);
     const marker = selected ? s.accent("› ") : "  ";
     const branch = "  " + (lastAgent ? "└─ " : "├─ ");
     const continuation = "  " + (lastAgent ? "   " : "│  ");
@@ -215,13 +216,22 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
       const clipped = truncateToWidth(name, nameWidth, "…");
       first = prefix + s.title(clipped) + " ".repeat(Math.max(2, width - prefixWidth - visibleWidth(clipped) - visibleWidth(status))) + status;
     } else {
-      const wide = width >= 60, narrow = width < 36;
+      const wide = outerWidth >= 60, narrow = outerWidth < 36;
+      const nativeStatus = outerWidth < 72 ? s.status(state.tone, [...stateText][0] ?? "") : status;
       const badge = (value: PickerBadge | undefined) => value
         ? s.status(value.tone, agentText(narrow ? value.compact : value.text)) : undefined;
+      const activity = wide ? badge(meta.activity) : narrow ? badge(meta.activity) : undefined;
+      const result = badge(meta.result);
+      const requiredWidth = visibleWidth([activity, result, nativeStatus].filter((value): value is string => !!value).join("  "));
+      const parentBudget = wide ? Math.max(0, width - prefixWidth - requiredWidth - 4) : 0;
+      const parentText = wide && meta.parent ? agentText(meta.parent) : "";
+      const parent = parentText
+        ? parentBudget >= 4 ? s.muted(truncateToWidth(parentText, parentBudget, "…"))
+          : parentBudget >= 2 ? s.muted("p:") : undefined
+        : undefined;
       const parts = narrow
-        ? [badge(meta.activity), badge(meta.result), status]
-        : [status, wide && meta.parent ? s.muted(agentText(meta.parent)) : undefined,
-          wide ? badge(meta.activity) : undefined, badge(meta.result)];
+        ? [activity, result, nativeStatus]
+        : [parent, activity, result, nativeStatus];
       const tail = parts.filter((value): value is string => !!value).join("  "), tailWidth = visibleWidth(tail);
       const nameWidth = Math.max(1, width - prefixWidth - tailWidth - 2);
       const clipped = truncateToWidth(name, nameWidth, "…");
@@ -232,7 +242,7 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
       Math.max(1, width - visibleWidth(secondPrefix)), "…"));
     return selected ? [s.selected(pad(first)), s.selected(pad(second))] : [truncateToWidth(first, width, ""), second];
   }
-  private bodyLines(width: number, budget: number): string[] {
+  private bodyLines(width: number, budget: number, outerWidth = width): string[] {
     if (!this.filtered.length) {
       const text = this.loading ? this.view.loading : this.error || (this.rows.length ? this.view.noMatch : this.view.empty);
       return [this.error ? this.style.status("error", text) : this.style.muted(text)];
@@ -255,7 +265,7 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
     while (this.offset > 0 && height(this.offset - 1, selected) <= budget) this.offset--;
     const lines = ancestors(items[this.offset]);
     for (const item of items.slice(this.offset)) {
-      const part = item.kind === "agent" ? this.rowLines(item.row!, width, item.lastAgent!)
+      const part = item.kind === "agent" ? this.rowLines(item.row!, width, item.lastAgent!, outerWidth)
         : [...(item.gap ? [""] : []), workspaceLine(item.workspace)];
       const descendants = item.kind === "workspace" ? 2 : 0;
       if (lines.length + part.length + descendants > budget) break;
@@ -276,7 +286,7 @@ export class PickerOverlay<Row extends { key: string }> implements Component, Fo
       const text = truncateToWidth(line, inner, "");
       return text + " ".repeat(Math.max(0, inner - visibleWidth(text)));
     };
-    const body = this.bodyLines(inner, layout.body);
+    const body = this.bodyLines(inner, layout.body, this.width);
     const count = this.filtered.length === this.rows.length ? String(this.rows.length) : `${this.filtered.length}/${this.rows.length}`;
     const extra = agentText(this.view.summary?.(this.rows));
     const summary = count + (this.options.markIdentity ? ` · ${this.marked.size} marked` : "")

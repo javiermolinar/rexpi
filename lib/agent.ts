@@ -2,6 +2,7 @@ import { record, uuid, type Identity } from "./state.ts";
 
 export const AGENT_HANDLE_VERSION = 1 as const;
 export const AGENT_BOOTSTRAP_ENV = "PI_REX_AGENT_HANDLE";
+export const AGENT_NOTIFY_SETTLEMENT_ENV = "PI_REX_AGENT_NOTIFY_SETTLEMENT";
 const MAX_AGENT_BOOTSTRAP_BYTES = 2048;
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;

@@ -7,7 +7,7 @@ import { sandbox, world, uuid, binding, server } from "./fixtures.mjs";
 import { BindingStore } from "../lib/store.ts";
 import { BOOTSTRAP_ENV, childBootstrap, decodeBootstrap, encodeBootstrap } from "../lib/state.ts";
 import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, MAX_CAPABILITY_DELEGATION_DEPTH, decodeCapabilityDeadline, decodeCapabilityGrant, encodeCapabilityGrant } from "../lib/launch.ts";
-import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
+import { AGENT_BOOTSTRAP_ENV, AGENT_NOTIFY_SETTLEMENT_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
 
 const enforcementGrant = (change = {}) => ({ tools: ["rex_start_pi"], readPaths: ["/repo"], writePaths: ["/repo/out"],
   delegation: { maxDepth: 1 }, returnResults: false, turns: 2, timeoutMs: 10_000, ...change });
@@ -17,7 +17,7 @@ function fixture(t, overrides = {}, settings = {}) {
   const changes = { REX_SESSION: w.source.sessionId, REX_BLOCK: w.source.blockId, PI_REX_CLI: "/bin/echo",
     PI_REX_STATE_DIR: join(root, "bindings"), PI_REX_BINARY: "/bin/echo", PI_REX_BOOTSTRAP: undefined,
     PI_REX_RETURN_KEY: undefined, PI_REX_AGENTS_KEY: undefined, PI_REX_MESSAGES_STOP_KEY: undefined,
-    PI_REX_AGENT_HANDLE: undefined, PI_REX_CAPABILITY_GRANT: undefined, PI_REX_CAPABILITY_DEADLINE: undefined, ...overrides };
+    PI_REX_AGENT_HANDLE: undefined, PI_REX_AGENT_NOTIFY_SETTLEMENT: undefined, PI_REX_CAPABILITY_GRANT: undefined, PI_REX_CAPABILITY_DEADLINE: undefined, ...overrides };
   const old = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
   for (const [key, value] of Object.entries(changes)) value === undefined ? delete process.env[key] : process.env[key] = value;
   t.after(() => {
@@ -129,14 +129,37 @@ test("related agent bootstrap matches the child seed and retained handles stale 
   const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
   const handle = agentHandleFromIdentity(seed, { runtimeId: uuid(), runId: uuid(), requestId: "launch-1",
     messageId: uuid(), endpointGeneration: 1 });
-  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle) });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle),
+    PI_REX_AGENT_NOTIFY_SETTLEMENT: "1" });
   await f.events.get("session_start")({}, f.ctx);
   assert.equal(process.env[AGENT_BOOTSTRAP_ENV], undefined);
+  assert.equal(process.env[AGENT_NOTIFY_SETTLEMENT_ENV], undefined);
   const status = () => f.tools.get("rex_agent_status").execute("status", { handle }, undefined, undefined, f.ctx);
   assert.equal((await status()).details.handle.runId, handle.runId);
+  f.events.get("agent_end")({}, f.ctx);
+  assert.notEqual((await status()).details.lifecycle.delivery, "created", "child bootstrap preserves settlement opt-in");
+  const completionTool = f.tools.get("rex_agent_complete");
+  assert.equal(completionTool.parameters.properties.handle, undefined);
+  assert.equal(completionTool.parameters.properties.requestId, undefined);
+  const completed = await completionTool.execute("complete", { outcome: "completed", summary: "Review complete" }, undefined, undefined, f.ctx);
+  assert.equal(completed.details.outcome, "completed");
+  assert.equal((await status()).details.lifecycle.result, "ready");
   await f.events.get("session_tree")({}, f.ctx);
   assert.equal((await status()).details.lifecycle.binding, "replaced");
   assert.equal((await status()).details.evidence, "retained");
+});
+
+test("malformed settlement bootstrap is consumed and rejected with the agent handle", async t => {
+  const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
+  const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
+  const handle = agentHandleFromIdentity(seed, { runtimeId: uuid(), runId: uuid(), requestId: "launch-1",
+    messageId: uuid(), endpointGeneration: 1 });
+  const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle),
+    PI_REX_AGENT_NOTIFY_SETTLEMENT: "yes" });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.equal(f.tools.size, 0);
+  assert.equal(process.env[AGENT_NOTIFY_SETTLEMENT_ENV], undefined);
+  assert.match(f.notices.at(-1)[0], /settlement|unavailable/);
 });
 
 test("miscorrelated agent bootstrap is consumed and rejected instead of becoming a root registration", async t => {

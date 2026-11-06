@@ -27,7 +27,7 @@ import { registerConversationTools } from "./conversation.ts";
 import { PeerRuntime } from "../lib/peer.ts";
 import { registerPeerTools } from "./peer.ts";
 import { AgentRuntime } from "../lib/agent-runtime.ts";
-import { AGENT_BOOTSTRAP_ENV, decodeAgentBootstrap, type AgentHandle } from "../lib/agent.ts";
+import { AGENT_BOOTSTRAP_ENV, AGENT_NOTIFY_SETTLEMENT_ENV, decodeAgentBootstrap, type AgentHandle } from "../lib/agent.ts";
 import { registerAgentTools } from "./agent.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 import { capabilityGrant } from "./grants.ts";
@@ -124,17 +124,24 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
     const generation = activation;
     let seed: Bootstrap | undefined;
     let agentSeed: AgentHandle | undefined;
+    let notifyAgentSettlement = false;
     try {
       if (allowBootstrap && !consumed) {
         consumed = true;
         const raw = process.env[BOOTSTRAP_ENV], rawAgent = process.env[AGENT_BOOTSTRAP_ENV];
+        const rawAgentNotify = process.env[AGENT_NOTIFY_SETTLEMENT_ENV];
         const rawGrant = process.env[CAPABILITY_GRANT_ENV], rawDeadline = process.env[CAPABILITY_DEADLINE_ENV];
-        delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV]; delete process.env[CAPABILITY_GRANT_ENV];
+        delete process.env[BOOTSTRAP_ENV]; delete process.env[AGENT_BOOTSTRAP_ENV]; delete process.env[AGENT_NOTIFY_SETTLEMENT_ENV];
+        delete process.env[CAPABILITY_GRANT_ENV];
         delete process.env[CAPABILITY_DEADLINE_ENV];
         // Any grant-shaped envelope fails closed before earlier identity metadata can disarm the guards.
         if (rawGrant !== undefined || rawDeadline !== undefined)
           capabilityFailure = "Capability grant bootstrap was rejected; all tool authority is denied";
         if (raw) seed = decodeBootstrap(raw);
+        if (rawAgentNotify !== undefined) {
+          if (!rawAgent || !["0", "1"].includes(rawAgentNotify)) throw new Error("Invalid agent settlement notification bootstrap");
+          notifyAgentSettlement = rawAgentNotify === "1";
+        }
         if (rawAgent) {
           if (!seed) throw new Error("Agent handle bootstrap requires a related launch bootstrap");
           agentSeed = decodeAgentBootstrap(rawAgent);
@@ -170,7 +177,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (generation !== activation) { peer.detach(); return; }
       agentRuntime.attach(peer, peer);
       if (agentSeed) {
-        agentRuntime.register(agentSeed);
+        agentRuntime.register(agentSeed, { notifyParentOnSettlement: notifyAgentSettlement });
         agentRuntime.observe(agentSeed, { type: "binding.verified" });
       }
       const resolver = new ProjectResolver((command, args, options) => pi.exec(command, args, options));
@@ -256,7 +263,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         registerMessagingControls(toolApi, () => ({ runtime, messaging }));
         registerConversationTools(toolApi, () => ({ runtime, messaging }));
         registerPeerTools(toolApi, () => ({ runtime, peer }));
-        registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime }));
+        registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime, localAgentHandle: agentSeed }));
         registerDelegationTool(toolApi, () => ({ runtime, delegation, messaging, capability, cache: delegationCalls }));
         registerFanoutTools(toolApi, () => ({ runtime, fanout, join: joinRuntime, registry: fanoutRegistry, messaging, capability }));
         registerTerminalFeatures(toolApi, () => ({ runtime, terminal }), ctx);

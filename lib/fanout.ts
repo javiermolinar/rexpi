@@ -48,8 +48,8 @@ function registryDigest(inputs: readonly FanoutChildInput[], options: FanoutOpti
 export class FanoutRegistry {
   private readonly executions = new Map<string, { digest: string; execution: FanoutExecution }>();
   start(id: string, inputs: readonly FanoutChildInput[], options: FanoutOptions,
-      operation: () => FanoutExecution): FanoutExecution {
-    const digest = registryDigest(inputs, options), prior = this.executions.get(id);
+      operation: () => FanoutExecution, identityInputs: readonly FanoutChildInput[] = inputs): FanoutExecution {
+    const digest = registryDigest(identityInputs, options), prior = this.executions.get(id);
     if (prior) {
       if (prior.digest !== digest) throw new Error("Conflicting fan-out logical ID");
       return prior.execution;
@@ -92,8 +92,9 @@ export class FanoutRuntime {
     this.delegation = delegation; this.registry = registry;
   }
 
-  start(id: string, inputs: readonly FanoutChildInput[], options: FanoutOptions): FanoutExecution {
-    return this.registry.start(id, inputs, options, () => this.compose(id, inputs, options));
+  start(id: string, inputs: readonly FanoutChildInput[], options: FanoutOptions,
+      identityInputs: readonly FanoutChildInput[] = inputs): FanoutExecution {
+    return this.registry.start(id, inputs, options, () => this.compose(id, inputs, options), identityInputs);
   }
   /** Uncached dispatch composition for an extension-lifetime registry. */
   compose(id: string, inputs: readonly FanoutChildInput[], options: FanoutOptions): FanoutExecution {
@@ -124,7 +125,8 @@ export class FanoutRuntime {
     const dispatch = async (child: FanoutChildExecution) => {
       child.state = "dispatching";
       try {
-        const delegation = await this.delegation.delegate(child.id, child.task, child.options, options.cwd, signal);
+        const delegationId = "fanout:" + createHash("sha256").update(JSON.stringify([id, child.id])).digest("hex");
+        const delegation = await this.delegation.delegate(delegationId, child.task, child.options, options.cwd, signal);
         child.delegation = delegation; child.handle = delegation.handle;
         if (delegation.creation !== "confirmed" || delegation.binding !== "bound") {
           child.state = "failed"; child.error = "Delegation creation/binding is not confirmed";

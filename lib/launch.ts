@@ -12,7 +12,7 @@ import type { MessagingRuntime, ReturnTicket } from "./messaging/runtime.ts";
 import { endpointFromBinding, type Endpoint } from "./messaging/protocol.ts";
 import { agentEndpointId } from "./peer.ts";
 import type { DirectoryResolver, ResolvedDirectory } from "./projects.ts";
-import { AGENT_BOOTSTRAP_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
+import { AGENT_BOOTSTRAP_ENV, AGENT_NOTIFY_SETTLEMENT_ENV, agentHandleFromIdentity, encodeAgentBootstrap, type AgentHandle } from "./agent.ts";
 import type { AgentRuntime } from "./agent-runtime.ts";
 import { AgentRelationStore } from "./agent-relations.ts";
 
@@ -219,6 +219,7 @@ export function validateOptions(value: LaunchOptions): void {
   if (value.returnResults && (!value.prompt?.trim() || value.related === false))
     throw new Error("returnResults requires a nonblank delegated task prompt and related=true (or omitted)");
   const related = value.returnResults || (value.related ?? value.role === "review");
+  if (value.notifyParentOnSettlement && !related) throw new Error("Settlement notification requires a related launch");
   if (value.grant !== undefined && !related) throw new Error("grant requires a related launch");
   if (value.focus !== undefined && typeof value.focus !== "boolean") throw new Error("focus must be boolean");
   if (value.placement !== undefined && !["session", "right", "down", "tab"].includes(value.placement)) throw new Error("Invalid placement");
@@ -344,6 +345,7 @@ export class Launcher {
       ...(options.grant !== undefined && capabilityDeadline(options.grant) !== undefined
         ? [CAPABILITY_DEADLINE_ENV + "=" + capabilityDeadline(options.grant)] : []),
       ...(handle ? [AGENT_BOOTSTRAP_ENV + "=" + encodeAgentBootstrap(handle)] : []),
+      ...(handle && options.notifyParentOnSettlement === true ? [AGENT_NOTIFY_SETTLEMENT_ENV + "=1"] : []),
       binary, ...piArguments(taskOptions, seed.piSessionId, extension)];
     this.runtime.assert(own); combined.throwIfAborted();
     const result: LaunchResult = { launchId: id, creation: "unknown", placement, identity: {

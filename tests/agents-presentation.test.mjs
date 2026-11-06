@@ -171,6 +171,8 @@ test("wide, medium, narrow and ASCII layouts bound every line and preserve two-l
   const direct = relation(parent, child), evidence = [status(direct, "settled", "pending")];
   const unicode = setup([parent, child], [direct], evidence);
   assert.match(lines(unicode, 88).join("\n"), /↳ .*parent:Parent.*act:settled.*result:pending/);
+  assert.match(lines(unicode, 60).join("\n"), /parent:Parent.*act:settled.*result:pending/);
+  assert.doesNotMatch(lines(unicode, 59).join("\n"), /act:settled/);
   assert.match(lines(unicode, 50).join("\n"), /result:pending/);
   assert.doesNotMatch(lines(unicode, 50).join("\n"), /act:settled/);
   assert.match(lines(unicode, 30).join("\n"), /A:s.*R:p/);
@@ -178,6 +180,24 @@ test("wide, medium, narrow and ASCII layouts bound every line and preserve two-l
   assert.match(lines(ascii, 88).join("\n"), /\+- Child/);
   for (const overlay of [unicode, ascii]) for (const width of [1, 2, 10, 24, 28, 35, 40, 59, 72, 100])
     for (const line of lines(overlay, width)) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
+});
+
+test("wide boundary rows preserve lifecycle badges and native status before parent or title text", () => {
+  const parent = agentRow("Parent with a very long name ".repeat(8)), child = agentRow("Child with a very long delegated title ".repeat(8));
+  const direct = relation(parent, child), overlay = setup([parent, child], [direct], [status(direct, "settled", "pending")]);
+  for (const width of [60, 64]) {
+    const childLine = lines(overlay, width).find(line => line.includes("↳"));
+    assert.ok(childLine, `child row at ${width}`);
+    assert.match(childLine, /act:settled/);
+    assert.match(childLine, /result:pending/);
+    assert.match(childLine, /●/);
+    assert.doesNotMatch(childLine, /Working/);
+    assert.ok(visibleWidth(childLine) <= width);
+  }
+  const wideChild = lines(overlay, 72).find(line => line.includes("↳"));
+  assert.match(wideChild, /act:settled/);
+  assert.match(wideChild, /result:pending/);
+  assert.match(wideChild, /● Working/);
 });
 
 test("refresh evidence failures remove stale relation badges without retargeting selection", () => {

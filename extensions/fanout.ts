@@ -54,7 +54,7 @@ export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolS
           grant: source.capability ? source.capability.deriveChildGrant(child.options.grant) : child.options.grant } }));
         source.messaging?.observeRun(ctx);
         execution = fanout.start(id, admitted, { concurrency, cwd: ctx.cwd,
-          ...(source.capability || signal ? { signal: source.capability?.toolSignal(signal) ?? signal } : {}) });
+          ...(source.capability || signal ? { signal: source.capability?.toolSignal(signal) ?? signal } : {}) }, inputs);
       }
       const details = await join.join(execution, origin(execution, source.runtime), signal);
       return { content: [{ type: "text", text: `Fan-out ${id}: ${details.state}; ${details.children.length} child outcomes.` }],

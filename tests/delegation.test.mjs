@@ -5,14 +5,17 @@ import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { AgentRuntime } from "../lib/agent-runtime.ts";
 import { DelegationCache, DelegationRuntime } from "../lib/delegation.ts";
+import { JoinCache, JoinRuntime } from "../lib/join.ts";
 import { CAPABILITY_GRANT_ENV, decodeCapabilityGrant, Launcher } from "../lib/launch.ts";
 import { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { BOOTSTRAP_ENV, decodeBootstrap } from "../lib/state.ts";
+import { AGENT_NOTIFY_SETTLEMENT_ENV } from "../lib/agent.ts";
+import { peerAgentNotificationId } from "../lib/peer.ts";
 import { registerDelegationTool } from "../extensions/delegation.ts";
 import { active, binding } from "./fixtures.mjs";
 
 const extension = fileURLToPath(new URL("../extensions/index.ts", import.meta.url));
-const grant = (overrides = {}) => ({ tools: ["read", "rex_message_send"], readPaths: ["."], writePaths: [],
+const grant = (overrides = {}) => ({ tools: ["read", "rex_message_send", "rex_agent_complete"], readPaths: ["."], writePaths: [],
   delegation: { maxDepth: 0 }, returnResults: false, turns: 3, timeoutMs: 10_000, ...overrides });
 async function fixture(t, options = {}) {
   const a = await active(t), sm = SessionManager.create(a.root, join(a.root, "sessions"), { id: "test-session" });
@@ -46,7 +49,9 @@ test("delegation composes a fresh related launch with literal task/grant and ind
   assert.equal(result.handle.requestId, "delegation-one");
   assert.equal(result.launch.handle.requestId, result.handle.requestId);
   assert.equal(result.launch.returnSetup, undefined);
-  assert.equal(f.w.created.length, 1); assert.equal(f.w.created[0].at(-1), task);
+  assert.equal(f.w.created.length, 1);
+  const prompt = f.w.created[0].at(-1);
+  assert.equal(prompt, task);
   const encoded = f.w.created[0].find(value => value.startsWith(CAPABILITY_GRANT_ENV + "="));
   assert.deepEqual(decodeCapabilityGrant(encoded.slice(encoded.indexOf("=") + 1)), grant());
   assert.equal(JSON.stringify(result).includes("token"), false);
@@ -77,10 +82,51 @@ test("result correlation and settlement subscription use the exact issued capabi
   assert.equal(events.at(-1).lifecycle.activity, "settled"); assert.equal(events.at(-1).lifecycle.result, "pending");
 });
 
+test("real child bootstrap supports explicit completion and settlement without conflating their evidence", async t => {
+  const f = await fixture(t), result = await f.delegation.delegate("real-child-contract", "Complete the assigned task",
+    { grant: grant(), notifyParentOnSettlement: true }, f.root);
+  const args = f.w.created[0], prompt = args.at(-1);
+  assert.equal(prompt, "Complete the assigned task");
+  assert.ok(args.includes(AGENT_NOTIFY_SETTLEMENT_ENV + "=1"));
+
+  const child = new AgentRuntime(), notifications = [];
+  child.register(result.handle, { notifyParentOnSettlement: args.includes(AGENT_NOTIFY_SETTLEMENT_ENV + "=1") });
+  child.attach({}, { async notifyParent(notification) {
+    notifications.push(notification);
+    return { id: peerAgentNotificationId(notification), state: "accepted", processingConfirmed: false, completionConfirmed: false };
+  } });
+  child.observeLocalSettlement(result.launch.identity);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(notifications.length, 1);
+  assert.equal(child.cachedStatuses()[0].lifecycle.delivery, "accepted");
+  assert.equal(child.cachedStatuses()[0].lifecycle.result, "pending");
+
+  const completion = child.complete(result.handle, { version: 1, ...result.launch.identity, origin: result.launch.origin }, {
+    requestId: result.handle.requestId, runId: result.handle.runId, runtimeId: result.handle.runtimeId,
+    outcome: "completed", summary: "Assigned task completed",
+  });
+  const parent = new AgentRuntime({ async agentResult() {
+    return { target: result.launch.identity, endpointId: "a".repeat(64), handle: result.handle, completion };
+  } });
+  parent.register(result.handle);
+  const evidence = await parent.result(result.handle, result.launch.origin);
+  assert.equal(evidence.state, "ready");
+  assert.deepEqual(evidence.completion, completion);
+  const execution = { settled: Promise.resolve(), cancel() {}, snapshot: () => ({ id: "real-child-join", completed: true,
+    dispatching: 0, children: [{ id: "real-child", state: "delegated", handle: result.handle, delegation: result }] }) };
+  const join = new JoinRuntime({ result: (handle, source, signal) => parent.result(handle, source, signal) }, new JoinCache());
+  const joined = await join.join(execution, result.launch.origin);
+  assert.equal(joined.state, "succeeded");
+  assert.equal(joined.children[0].state, "succeeded");
+});
+
 test("rejected grants create nothing and creation/binding failures preserve separate evidence", async t => {
   const f = await fixture(t);
   await assert.rejects(f.delegation.delegate("bad-grant", "task", { grant: grant({ timeoutMs: 0 }) }, f.root), /timeoutMs/);
   await assert.rejects(f.delegation.delegate("blank-task", " \n", { grant: grant() }, f.root), /task/);
+  assert.equal(f.w.created.length, 0);
+  await assert.rejects(f.delegation.delegate("missing-completion-tool", "task", { grant: grant({ tools: ["read"] }) }, f.root),
+    /rex_agent_complete/);
   assert.equal(f.w.created.length, 0);
   f.w.failCreate = true;
   const unknown = await f.delegation.delegate("unknown-create", "task", { grant: grant() }, f.root);
@@ -161,6 +207,14 @@ test("uncertain creation and rejected inputs remain fenced by their original log
   assert.equal(f.w.created.length, 1, "a corrected grant cannot acquire a new launch under a rejected ID");
 });
 
+test("delegation deduplication binds the literal parent cwd without launching on changed scope", async t => {
+  const f = await fixture(t), options = { grant: grant() };
+  await f.delegation.delegate("cwd-scoped-delegation", "literal task", options, f.root);
+  await assert.rejects(f.delegation.delegate("cwd-scoped-delegation", "literal task", options, join(f.root, "other")),
+    /Conflicting delegation logical ID/);
+  assert.equal(f.w.created.length, 1);
+});
+
 test("delegation result, cancellation and stop controls preserve the original handle and stale failures", async t => {
   const handle = { version: 1, taskId: "task", conversationId: "conversation", runtimeId: "runtime", runId: "run",
     requestId: "request", messageId: "message", endpointGeneration: 1 };
@@ -178,9 +232,16 @@ test("delegation result, cancellation and stop controls preserve the original ha
   assert.equal((await delegation.stop(handle, source, true)).handle, handle);
   assert.deepEqual(calls.map(call => call[0]), ["status", "result", "cancel", "stop"]);
   for (const call of calls) assert.equal(call[1], handle);
+  assert.deepEqual(calls.find(call => call[0] === "stop")[3], { authorize: true });
   const stale = new Error("Stale original endpoint");
   controls.result = async () => { throw stale; };
   await assert.rejects(delegation.result(handle, source), error => error === stale);
   const noControls = new DelegationRuntime({ launch() { throw new Error("No launch expected"); } });
   assert.throws(() => noControls.cancel(handle, source), /unavailable/);
+});
+
+test("delegation stop uses the real authorization object contract", async t => {
+  const f = await fixture(t), result = await f.delegation.delegate("real-stop-contract", "task", { grant: grant() }, f.root);
+  const stopped = await f.delegation.stop(result.handle, f.runtime.snapshot().state, true);
+  assert.equal(stopped.state, "disconnected");
 });

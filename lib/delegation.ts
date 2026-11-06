@@ -50,12 +50,12 @@ function canonical(value: unknown): string {
 /** Extension-lifetime evidence; a replacement launcher cannot repeat uncertain logical work. */
 export class DelegationCache {
   private readonly calls = new Map<string, { digest: string; result: Promise<DelegationResult> }>();
-  run(id: string, task: string, options: DelegateOptions,
+  run(id: string, task: string, options: DelegateOptions, cwd: string,
       operation: (task: string, options: DelegateOptions) => Promise<DelegationResult>): Promise<DelegationResult> {
     if (typeof id !== "string" || !id.length || id.length > 1024) return Promise.reject(new Error("Invalid delegation ID"));
     let digest: string, admitted: { task: string; options: DelegateOptions };
     try {
-      const body = canonical({ task, options });
+      const body = canonical({ task, options, cwd });
       digest = createHash("sha256").update(body).digest("hex"); admitted = JSON.parse(body);
     } catch (error) { return Promise.reject(error); }
     const prior = this.calls.get(id);
@@ -83,7 +83,7 @@ export class DelegationRuntime {
   }
 
   delegate(id: string, task: string, options: DelegateOptions, cwd: string, signal?: AbortSignal): Promise<DelegationResult> {
-    return this.cache.run(id, task, options, (admittedTask, admittedOptions) =>
+    return this.cache.run(id, task, options, cwd, (admittedTask, admittedOptions) =>
       this.compose(id, admittedTask, admittedOptions, cwd, signal));
   }
   /** Uncached composition for an extension-lifetime admission cache. */
@@ -92,6 +92,8 @@ export class DelegationRuntime {
     if (typeof task !== "string" || !task.trim() || task.length > 16_384 || task.includes("\0"))
       throw new Error("Invalid delegated task");
     const grant = parseCapabilityGrant(options.grant);
+    if (!grant.tools.includes("rex_agent_complete"))
+      throw new Error("Delegation grant requires rex_agent_complete for explicit completion evidence");
     const launch = await this.launcher.launch(id, {
       prompt: task, related: true, role: "chat", returnResults: grant.returnResults, grant,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -126,6 +128,6 @@ export class DelegationRuntime {
     return this.controls().cancel(handle, source, signal);
   }
   stop(handle: AgentHandle, source: Identity, authorize: true, signal?: AbortSignal): Promise<AgentStop> {
-    return this.controls().stop(handle, source, authorize, signal);
+    return this.controls().stop(handle, source, { authorize: true }, signal);
   }
 }

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AGENT_HANDLE_VERSION } from "../lib/agent.ts";
+import { AGENT_HANDLE_VERSION, type AgentHandle } from "../lib/agent.ts";
 import { AgentRuntime, MAX_AGENT_COMPLETION_ARTIFACT_BYTES, MAX_AGENT_COMPLETION_ARTIFACTS,
   MAX_AGENT_COMPLETION_ERROR_CODE_BYTES, MAX_AGENT_COMPLETION_ERROR_DETAILS_BYTES,
   MAX_AGENT_COMPLETION_ERROR_MESSAGE_BYTES, MAX_AGENT_COMPLETION_SUMMARY_BYTES, MAX_AGENT_CURSOR_BYTES,
@@ -17,9 +17,10 @@ const handle = Type.Object({
   messageId: uuid(), endpointGeneration: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
 }, { additionalProperties: false });
 
-export interface AgentToolState { runtime?: Runtime; peer?: PeerRuntime; agent?: AgentRuntime }
+export interface AgentToolState { runtime?: Runtime; peer?: PeerRuntime; agent?: AgentRuntime; localAgentHandle?: AgentHandle }
 
 export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolState): void {
+  const localAgentHandle = current().localAgentHandle;
   const active = (sessionId: string) => {
     const source = current();
     requireFeature(source.runtime, source.peer, sessionId);
@@ -31,9 +32,9 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     executionMode: "sequential",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
-      handle,
-      requestId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }),
-      runId: uuid(), runtimeId: uuid(),
+      ...(localAgentHandle ? {} : { handle,
+        requestId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }),
+        runId: uuid(), runtimeId: uuid() }),
       outcome: Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("cancelled")]),
       summary: Type.String({ minLength: 1, maxLength: MAX_AGENT_COMPLETION_SUMMARY_BYTES }),
       artifacts: Type.Optional(Type.Array(Type.String({ minLength: 1,
@@ -50,8 +51,10 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
       if (!runtime) throw new Error("No verified Rexpi conversation");
       const agent = requireFeature(runtime, source.agent, sessionId), own = runtime.snapshot();
       if (own.state.piSessionId !== sessionId) throw new Error("Pi source conversation changed");
-      const details = agent.complete(params.handle, own.state, {
-        requestId: params.requestId, runId: params.runId, runtimeId: params.runtimeId,
+      const completionHandle = localAgentHandle ?? params.handle;
+      const correlation = localAgentHandle ?? params;
+      const details = agent.complete(completionHandle, own.state, {
+        requestId: correlation.requestId, runId: correlation.runId, runtimeId: correlation.runtimeId,
         outcome: params.outcome, summary: params.summary,
         ...(params.artifacts === undefined ? {} : { artifacts: params.artifacts }),
         ...(params.error === undefined ? {} : { error: params.error }),

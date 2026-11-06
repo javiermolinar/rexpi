@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
 import { active, binding, identity } from "./fixtures.mjs";
 import { endpointFromBinding, makeEnvelope } from "../lib/messaging/protocol.ts";
 import { WorkerMailboxTransport } from "../lib/messaging/transport-worker.ts";
@@ -23,7 +24,40 @@ test("worker transport publishes and closes after queued work without losing evi
   const page = new FileMailbox(a.root, child, a.store, own.server).page();
   assert.equal(page.messages.length, 1);
   assert.equal(page.messages[0].text, "worker finding");
-  assert.throws(() => mailbox.page(), /closed/);
+  await assert.rejects(mailbox.page(), /closed/);
+});
+
+test("stale worker pages fall back to current synchronous evidence without replaying publish", async t => {
+  const a = await active(t), own = a.runtime.snapshot();
+  const owner = endpointFromBinding(a.store.find(own.state, own.server));
+  const childBinding = binding({ ...identity("review"), taskId: owner.taskId }); a.store.write(childBinding);
+  const child = endpointFromBinding(childBinding), incoming = makeEnvelope(child, owner, "stale-worker-request", "result", "current finding");
+  new FileMailbox(a.root, owner, a.store, own.server).publish(incoming);
+  const { messageId, requestId, runId, runtimeId, inReplyTo, ...legacy } = incoming;
+  legacy.version = 1;
+  const stale = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    parentPort.on('message', request => {
+      if (request.operation === 'close') { parentPort.close(); return; }
+      if (request.operation === 'page') parentPort.postMessage({ id: request.id, value: workerData.page });
+    });`, { eval: true, workerData: { page: { messages: [legacy] } } });
+  let workers = 0;
+  const transport = new WorkerMailboxTransport(a.root, a.store.directory, own.server, () => ++workers === 1 ? stale
+    : new Worker(new URL("../lib/messaging/transport-thread.ts", import.meta.url), { execArgv: [],
+      workerData: { agentDirectory: a.root, stateDirectory: a.store.directory, server: own.server } }));
+  t.after(() => { transport.close(); stale.terminate(); });
+  const page = await transport.mailbox(owner).page();
+  assert.equal(page.messages.length, 1);
+  assert.equal(page.messages[0].messageId, incoming.id);
+  assert.equal(page.messages[0].requestId, incoming.requestId);
+  assert.equal(page.messages[0].version, 2);
+  assert.notEqual(transport.worker, stale);
+  const outgoing = makeEnvelope(owner, child, "fresh-worker-after-stale-read", "result", "fresh publish");
+  const published = await transport.mailbox(child).publish(outgoing);
+  assert.equal(published.state, "queued");
+  const stored = new FileMailbox(a.root, child, a.store, own.server).page().messages.find(e => e.id === outgoing.id);
+  assert.equal(stored.version, 2);
+  assert.equal(stored.messageId, outgoing.id);
 });
 
 test("messaging runtime awaits worker pages and retains exact delivery behavior", async t => {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject stale mailbox-worker page schemas, fall back to bounded synchronous read-only decoding, and isolate pending outcomes by worker so retirement cannot reject fresh publishes or trigger publish replay.
+- Close orchestration review findings: delegated children receive a bootstrap-bound explicit-completion tool and one-shot settlement opt-in, high-level grants require `rex_agent_complete`, stop uses the real authorization contract, fan-out retries hash raw inputs and namespace child IDs by batch, delegation binds parent cwd, and outer-width layouts reserve activity, result, and native-status evidence before parent/title text.
 - Add a verified subagent hierarchy to the agent panel with stable selectable rows, Unicode/ASCII markers, conservative parent/history fallbacks, adaptive cached activity/result badges, and token-free persisted launch evidence. Filtering, narrow layouts, stale identities, ambiguity, cycles, and excessive depth never invent relationships or completion.
 - Add correlated `rex_delegate` launches with literal grants and token-free handles, bounded explicit `rex_fanout` dispatch, and bounded `rex_join` outcomes. Exact retries inspect original work; failures, cancellation, revocation, stale evidence, and coordinator interruption never trigger automatic relaunch, resend, cleanup, or handle switching.
 - Add version-2 message correlation and evidence-backed delivery records. Mailbox and void SDK acceptance no longer imply target delivery, processing, settlement, or completion; exact reply scope is validated and uncertain outcomes remain unknown.

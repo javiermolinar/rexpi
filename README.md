@@ -80,7 +80,7 @@ Verified launches retain token-free local relation records with exact block, pro
 
 Subagent badges come from cached exact-handle status; opening or refreshing the panel does not add peer status requests. `act:running`, `act:idle`, `act:settled`, and `act:?` describe activity only. `result:ready`, `result:failed`, and `result:cancelled` require explicit result evidence. Pending and cancelling both display `result:pending`; missing evidence displays `result:?`. Idle, settled, accepted delivery, and partial joins never imply completion.
 
-At 60 columns or more, rows show parent, activity, result, and details. From 36–59 columns activity is omitted. Below 36 columns the compact codes are `A:r/i/s/?` for running/idle/settled/unknown and `R:p/ok/f/c/?` for pending/ready/failed/cancelled/unknown. Every agent retains at most two lines, with details truncated last.
+At 60 columns or more, rows show parent, activity, result, and details. From 36–59 columns activity is omitted. Below 36 columns the compact codes are `A:r/i/s/?` for running/idle/settled/unknown and `R:p/ok/f/c/?` for pending/ready/failed/cancelled/unknown. Below 72 columns native status uses its semantic icon so parent/title text truncates before activity, result, or native-status evidence. Every agent retains at most two lines, with details truncated last.
 
 You can also just ask Pi to open or reuse a named workspace, choose a model for a new agent, return to its parent, or inspect incoming findings. Those use tools rather than more slash commands.
 
@@ -161,11 +161,11 @@ These are application-level tool grants, not an OS sandbox. Explicitly granting 
 
 ### Delegation and fan-out
 
-`rex_delegate` composes a fresh related launch from a literal `task` and explicit `grant`. It returns a token-free handle with separate `creation`, `binding`, `activity`, and `result` evidence. `activity` starts as `unknown` and `result` as `pending`, even after exact startup binding. When `grant.returnResults` is true, the result-return ticket shares the handle's `requestId`, `runId`, and `messageId`; the child-agent and parent-messaging runtime IDs remain separate. `notifyParentOnSettlement` is an independent opt-in, not part of result-return authority.
+`rex_delegate` composes a fresh related launch from a literal `task` and explicit `grant`. The grant must whitelist `rex_agent_complete`. In a delegated child, that tool binds the verified bootstrap handle internally and accepts only outcome, summary, artifacts, and error details; the model does not need to copy request, run, runtime, or handle identifiers. This completion path is independent of mailbox result return. The launch returns a token-free handle with separate `creation`, `binding`, `activity`, and `result` evidence. `activity` starts as `unknown` and `result` as `pending`, even after exact startup binding. When `grant.returnResults` is true, the result-return ticket shares the handle's `requestId`, `runId`, and `messageId`; the child-agent and parent-messaging runtime IDs remain separate. `notifyParentOnSettlement` is an independent opt-in propagated through a one-shot child bootstrap value, not part of result-return authority. Accepted settlement delivery still proves neither processing nor completion.
 
-Exact logical-ID retries return the original delegation outcome without launching again. Changed tasks, grants, routes, or subscription options conflict instead. `inspect`, `status`, `result`, `cancel`, and `stop` use the original handle and existing agent controls; stale or uncertain evidence never causes an automatic relaunch, resend, cleanup, or handle switch.
+Exact logical-ID retries return the original delegation outcome without launching again. Changed tasks, grants, routes, subscription options, or the literal parent cwd conflict instead. `inspect`, `status`, `result`, `cancel`, and `stop` use the original handle and existing agent controls; stale or uncertain evidence never causes an automatic relaunch, resend, cleanup, or handle switch.
 
-`rex_fanout` accepts 1–64 explicit children, each with its own `id`, `task`, `grant`, and optional settlement subscription. `concurrency` limits in-flight launches to 1–8. Dispatch stops on rejection, uncertain creation/binding, cancellation, or authority revocation. Already-dispatched handles and their evidence are preserved; there is no automatic refill after failure, restart, or cleanup.
+`rex_fanout` accepts 1–64 explicit children, each with its own batch-local `id`, `task`, `grant`, and optional settlement subscription. The same child ID in another fan-out identifies independent work. Exact retries compare the raw caller inputs; capability-attenuated grants are derived only when admitting new work. `concurrency` limits in-flight launches to 1–8. Dispatch stops on rejection, uncertain creation/binding, cancellation, or authority revocation. Already-dispatched handles and their evidence are preserved; there is no automatic refill after failure, restart, or cleanup.
 
 ```json
 {
@@ -174,7 +174,7 @@ Exact logical-ID retries return the original delegation outcome without launchin
       "id": "review-core",
       "task": "Review only the core lifecycle",
       "grant": {
-        "tools": ["read"],
+        "tools": ["read", "rex_agent_complete"],
         "readPaths": ["/repo/lib"],
         "writePaths": [],
         "delegation": { "maxDepth": 0 },
@@ -187,7 +187,7 @@ Exact logical-ID retries return the original delegation outcome without launchin
       "id": "review-transport",
       "task": "Review only the messaging transport",
       "grant": {
-        "tools": ["read"],
+        "tools": ["read", "rex_agent_complete"],
         "readPaths": ["/repo/lib/messaging"],
         "writePaths": [],
         "delegation": { "maxDepth": 0 },
@@ -217,7 +217,7 @@ The lifecycle tools are:
 |---|---|
 | `rex_agent_status` | Read binding, activity, delivery, and result observations for one exact handle. |
 | `rex_agent_events` | Page retained observations and stop/cancellation records; this does not probe the endpoint or trigger work. |
-| `rex_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome with exact request/run/runtime correlation. |
+| `rex_agent_complete` | Called in the verified local child to record an explicit `completed`, `failed`, or `cancelled` outcome; a delegated child's tool binds its bootstrap handle and correlation internally. |
 | `rex_agent_result` | Read the related child's explicit completion, or report `pending`, `cancelling`, or `unknown`. |
 | `rex_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
 | `rex_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |

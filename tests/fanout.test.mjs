@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FanoutRuntime } from "../lib/fanout.ts";
+import { DelegationRuntime } from "../lib/delegation.ts";
+import { agentHandleFromIdentity } from "../lib/agent.ts";
 import { uuid } from "./fixtures.mjs";
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -20,7 +22,8 @@ function controlled() {
   return { calls, gates,
     get active() { return active; }, get maximum() { return maximum; },
     delegate(id, task, options, cwd, signal) {
-      const gate = deferred(); gates.set(id, gate); active++; maximum = Math.max(maximum, active);
+      const gate = deferred(); gates.set(id, gate); gates.set(task.replace("literal task ", "child-"), gate);
+      active++; maximum = Math.max(maximum, active);
       calls.push({ id, task, options, cwd, signal });
       return gate.promise.finally(() => { active--; });
     },
@@ -30,12 +33,13 @@ function controlled() {
 test("fan-out honors bounded concurrency, literal per-child scope and independent handles", async t => {
   const delegate = controlled(), runtime = new FanoutRuntime(delegate), inputs = children(6), admitted = structuredClone(inputs);
   const execution = runtime.start("fanout-bound", inputs, { concurrency: 2, cwd: "/repo" });
-  await flush(); assert.deepEqual(delegate.calls.map(call => call.id), ["child-0", "child-1"]);
+  await flush(); assert.deepEqual(delegate.calls.map(call => call.task), ["literal task 0", "literal task 1"]);
+  assert.ok(delegate.calls.every(call => call.id.startsWith("fanout:")));
   assert.equal(delegate.maximum, 2); assert.equal(execution.snapshot().dispatching, 2);
   inputs[2].task = "mutated unauthorized task"; inputs[2].options.tools.push("bash");
   for (let i = 0; i < inputs.length; i++) {
     delegate.gates.get(`child-${i}`).resolve(outcome(`child-${i}`)); await flush();
-    if (i + 2 < inputs.length) assert.ok(delegate.calls.some(call => call.id === `child-${i + 2}`));
+    if (i + 2 < inputs.length) assert.ok(delegate.calls.some(call => call.task === `literal task ${i + 2}`));
   }
   await execution.settled;
   assert.equal(delegate.maximum, 2); assert.equal(delegate.calls.length, 6);
@@ -44,7 +48,7 @@ test("fan-out honors bounded concurrency, literal per-child scope and independen
   assert.deepEqual(snapshot.children.map(child => child.state), Array(6).fill("delegated"));
   assert.deepEqual(new Set(snapshot.children.map(child => child.handle.requestId)), new Set(children(6).map(child => child.id)));
   for (const call of delegate.calls) {
-    const index = Number(call.id.at(-1));
+    const index = Number(call.task.at(-1));
     assert.equal(call.task, `literal task ${index}`); assert.equal(call.cwd, "/repo");
     assert.deepEqual(call.options, grant({ turns: index + 1 }));
   }
@@ -110,6 +114,31 @@ test("authority revocation prevents additional launches and preserves already di
   await throwing.settled;
   assert.deepEqual(throwing.snapshot().children.map(child => child.state), ["revoked", "revoked"]);
   assert.equal(delegate.calls.length, 1);
+});
+
+test("identical child IDs in different fan-outs use independent delegation outcomes", async () => {
+  let launches = 0;
+  const origin = { taskId: uuid(), conversationId: uuid(), piSessionId: "parent", role: "main" };
+  const launcher = { async launch(id) {
+    launches++;
+    const identity = { taskId: origin.taskId, conversationId: uuid(), piSessionId: "child-" + launches, role: "chat" };
+    const handle = agentHandleFromIdentity(identity, { runtimeId: uuid(), runId: uuid(), requestId: id,
+      messageId: uuid(), endpointGeneration: 1 });
+    return { launchId: id, creation: "confirmed", placement: "tab", identity, origin,
+      startup: { state: "bound" }, handle };
+  } };
+  const delegation = new DelegationRuntime(launcher), runtime = new FanoutRuntime(delegation);
+  const inputs = [{ id: "shared-child", task: "same task", options: { grant: grant({ tools: ["read", "rex_agent_complete"] }) } }];
+  const first = runtime.start("batch-a", inputs, { concurrency: 1, cwd: "/repo" });
+  await first.settled;
+  const second = runtime.start("batch-b", inputs, { concurrency: 1, cwd: "/repo" });
+  await second.settled;
+  assert.equal(launches, 2, JSON.stringify({ first: first.snapshot(), second: second.snapshot() }));
+  assert.notEqual(first.snapshot().children[0].handle.conversationId, second.snapshot().children[0].handle.conversationId);
+  assert.notEqual(first.snapshot().children[0].handle.requestId, second.snapshot().children[0].handle.requestId);
+  assert.equal(runtime.start("batch-a", inputs, { concurrency: 1, cwd: "/repo" }), first);
+  assert.equal(runtime.start("batch-b", inputs, { concurrency: 1, cwd: "/repo" }), second);
+  assert.equal(launches, 2);
 });
 
 test("invalid batches reject before any child launch", async () => {

@@ -49,7 +49,7 @@ export function registerDelegationTool(pi: ExtensionAPI, current: () => Delegati
           : { notifyParentOnSettlement: params.notifyParentOnSettlement }) };
       // Admission precedes every runtime/capability check. Exact historical calls inspect
       // their original outcome without acquiring replacement authority or a new launcher.
-      const details = await cache.run(id, params.task, options, (task, admitted) => {
+      const details = await cache.run(id, params.task, options, ctx.cwd, (task, admitted) => {
         const runtime = source.runtime, delegation = source.delegation;
         if (!runtime || !delegation) throw new Error("Rexpi delegation is not active in a verified Rex terminal");
         if (runtime.snapshot().state.piSessionId !== ctx.sessionManager.getSessionId()) throw new Error("Pi source conversation changed");
