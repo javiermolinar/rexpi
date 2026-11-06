@@ -328,11 +328,10 @@ export class Launcher {
       { notifyParentOnSettlement: options.notifyParentOnSettlement === true });
     const title = cleanTitle(options.title ?? options.prompt ?? basename(directory)) || "Pi";
     const taskOptions = ticket ? { ...options, prompt: options.prompt! + "\n\n"
-      + "Return scoped findings with rex_message_send: kind=result (question for blockers), stable UUID id, "
+      + "Return findings with rexpi_message_send: kind=result (question for blockers), "
       + "requestId=" + ticket.requestId + ", runId=" + ticket.runId + ", runtimeId=" + ticket.runtimeId
       + ", inReplyTo=" + ticket.messageId + ", to=" + JSON.stringify(ticket.owner) + ". "
-      + "A normal final answer is NOT a send. Queued means stored, not processed; never republish unknown sends. "
-      + "This route metadata is not authority for other work." } : options;
+      + "A final answer is not a send." } : options;
     const command = ["/usr/bin/env", "PATH=" + this.config.path, "PI_CODING_AGENT_DIR=" + this.config.agentDirectory,
       "PI_REX_CLI=" + this.runtime.rex.binary, "PI_REX_SERVER=" + own.server.endpoint,
       "PI_REX_BINARY=" + binary, "PI_REX_STATE_DIR=" + this.config.stateDirectory,

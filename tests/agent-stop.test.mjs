@@ -79,7 +79,7 @@ async function peerPair(t) {
     parent.agent.register(handle); child.agent.register(handle);
     return handle;
   }
-  const stop = (handle, ctx = parent.ctx, authorize = true) => tools.get("rex_agent_stop")
+  const stop = (handle, ctx = parent.ctx, authorize = true) => tools.get("rexpi_agent_stop")
     .execute("stop", { handle, authorize }, undefined, undefined, ctx);
   return { w, parent, child, tools, childTools, register, stop };
 }
@@ -97,8 +97,8 @@ for (const mode of ["busy", "idle"]) {
     f.child.control.idle = mode === "idle";
     if (mode === "busy") f.parent.agent.observe(handle, { type: "activity.sample", idle: false, pendingMessages: true });
     const branch = f.child.sm.getBranch().map(entry => entry.id);
-    assert.equal(f.tools.get("rex_agent_stop").executionMode, "sequential");
-    assert.equal(f.tools.get("rex_agent_stop").description, "Stop.");
+    assert.equal(f.tools.get("rexpi_agent_stop").executionMode, "sequential");
+    assert.match(f.tools.get("rexpi_agent_stop").description, /graceful shutdown/);
     const first = await f.stop(handle);
     assert.equal(first.details.state, "accepted"); assert.equal(first.details.reason, "shutdown-requested");
     assert.equal(f.child.control.shutdowns, 1); assert.equal(f.child.control.aborts, 0); assertBounded(first);
@@ -145,14 +145,14 @@ test("closed requires positive prior exit evidence and performs no shutdown or t
 
 test("explicit authority, source, stale, foreign, miscorrelated, and ambiguous runtime fences have no shutdown effect", async t => {
   const f = await peerPair(t), handle = f.register(), nativeCalls = f.w.calls.length;
-  await assert.rejects(f.tools.get("rex_agent_stop").execute("stop", { handle }, undefined, undefined, f.parent.ctx),
+  await assert.rejects(f.tools.get("rexpi_agent_stop").execute("stop", { handle }, undefined, undefined, f.parent.ctx),
     /authorize:true/);
   for (const authorize of [false, "true"])
     await assert.rejects(f.stop(handle, f.parent.ctx, authorize), /authorize:true/);
   await assert.rejects(f.parent.agent.stop(makeHandle({ taskId: handle.taskId }), f.parent.state, { authorize: true }),
     /Unknown, foreign, or ambiguous/);
   await assert.rejects(f.parent.agent.stop(handle, { ...f.parent.state, taskId: uuid() }, { authorize: true }), /related task/);
-  await assert.rejects(f.childTools.get("rex_agent_stop").execute("self", { handle, authorize: true }, undefined, undefined, f.child.ctx),
+  await assert.rejects(f.childTools.get("rexpi_agent_stop").execute("self", { handle, authorize: true }, undefined, undefined, f.child.ctx),
     /remote handle/);
   const changedSession = { ...f.parent.ctx, sessionManager: { getSessionId: () => uuid() } };
   await assert.rejects(f.stop(handle, changedSession), /source conversation changed/);

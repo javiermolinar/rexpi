@@ -247,14 +247,14 @@ test("completion evidence uses existing per-run event retention and adds no run"
   assert.throws(() => runtime.track(makeHandle()), /run history bound/);
 });
 
-test("rex_agent_complete is sequential and fenced to the verified source session and local child", async () => {
+test("rexpi_agent_complete is sequential and fenced to the verified source session and local child", async () => {
   const { runtime, handle, source } = tracked();
   const tools = new Map();
   const pi = { registerTool(definition) { tools.set(definition.name, definition); } };
   let orientation = { version: 1, ...source };
   const verifiedRuntime = { snapshot: () => ({ state: orientation }) };
   registerAgentTools(pi, () => ({ runtime: verifiedRuntime, peer: {}, agent: runtime }));
-  const tool = tools.get("rex_agent_complete");
+  const tool = tools.get("rexpi_agent_complete");
   assert.ok(tool);
   assert.equal(tool.executionMode, "sequential");
   const ctx = { sessionManager: { getSessionId: () => source.piSessionId } };

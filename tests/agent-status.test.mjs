@@ -137,26 +137,26 @@ test("native tools expose only read-only status/events and event reads cause no 
   const runtime = { snapshot: () => ({ state: { piSessionId: "source-session" } }) }, peer = {};
   const tools = new Map();
   registerAgentTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime, peer, agent: agentRuntime }));
-  assert.deepEqual([...tools.keys()], ["rex_agent_complete", "rex_agent_result", "rex_agent_cancel", "rex_agent_stop",
-    "rex_agent_status", "rex_agent_events"]);
+  assert.deepEqual([...tools.keys()], ["rexpi_agent_complete", "rexpi_agent_result", "rexpi_agent_cancel", "rexpi_agent_stop",
+    "rexpi_agent_status", "rexpi_agent_events"]);
   const ctx = { sessionManager: { getSessionId: () => "source-session" } };
-  for (const name of ["rex_agent_result", "rex_agent_status", "rex_agent_events"]) {
+  for (const name of ["rexpi_agent_result", "rexpi_agent_status", "rexpi_agent_events"]) {
     assert.equal(tools.get(name).annotations.readOnlyHint, true);
     assert.equal(tools.get(name).annotations.destructiveHint, false);
   }
-  assert.equal(tools.get("rex_agent_complete").annotations.readOnlyHint, false);
-  assert.equal(tools.get("rex_agent_cancel").annotations.readOnlyHint, false);
-  assert.equal(tools.get("rex_agent_cancel").annotations.destructiveHint, true);
-  assert.equal(tools.get("rex_agent_stop").annotations.readOnlyHint, false);
-  assert.equal(tools.get("rex_agent_stop").annotations.destructiveHint, true);
-  const status = await tools.get("rex_agent_status").execute("status", { handle: agent }, undefined, undefined, ctx);
+  assert.equal(tools.get("rexpi_agent_complete").annotations.readOnlyHint, false);
+  assert.equal(tools.get("rexpi_agent_cancel").annotations.readOnlyHint, false);
+  assert.equal(tools.get("rexpi_agent_cancel").annotations.destructiveHint, true);
+  assert.equal(tools.get("rexpi_agent_stop").annotations.readOnlyHint, false);
+  assert.equal(tools.get("rexpi_agent_stop").annotations.destructiveHint, true);
+  const status = await tools.get("rexpi_agent_status").execute("status", { handle: agent }, undefined, undefined, ctx);
   assert.equal(status.details.resultAvailable, false); assert.equal(status.details.lifecycle.result, "pending");
   const calls = reader.calls;
-  const events = await tools.get("rex_agent_events").execute("events", { handle: agent, limit: 2 }, undefined, undefined, ctx);
+  const events = await tools.get("rexpi_agent_events").execute("events", { handle: agent, limit: 2 }, undefined, undefined, ctx);
   assert.equal(events.details.events.length, 2); assert.equal(reader.calls, calls);
   assert.equal(reader.sends + reader.modelCalls + reader.turns, 0);
   assert.ok(Buffer.byteLength(events.content[0].text) <= MAX_AGENT_EVENT_PAGE_BYTES);
-  await assert.rejects(tools.get("rex_agent_status").execute("wrong-source", { handle: agent }, undefined, undefined,
+  await assert.rejects(tools.get("rexpi_agent_status").execute("wrong-source", { handle: agent }, undefined, undefined,
     { sessionManager: { getSessionId: () => "other" } }), /conversation changed/);
 });
 

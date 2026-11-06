@@ -20,7 +20,7 @@ function acknowledge(a, args, change = x => x) {
   a.store.write(binding(change(seed), { blockId: a.w.next.blockId }));
   return seed;
 }
-const capabilityGrant = () => ({ tools: ["read", "write", "rex_start_pi"], readPaths: ["/repo/../literal", "/repo/[exact]"],
+const capabilityGrant = () => ({ tools: ["read", "write", "rexpi_start_pi"], readPaths: ["/repo/../literal", "/repo/[exact]"],
   writePaths: ["/repo/output"], delegation: { maxDepth: 2 }, returnResults: true, turns: 7, timeoutMs: 30_000 });
 const withoutGrantField = (value, field) => { const copy = { ...value }; delete copy[field]; return copy; };
 function grantAssignment(args) {

@@ -13,7 +13,7 @@ async function setup(t, parent = identity()) {
   const peer = binding(parent, { blockId: target.blockId });
   f.store.write(peer); f.w.blocks.set(target.blockId, target);
   return { ...f, tools, parent, target, peer,
-    back(signal, ctx = f.ctx) { return tools.get("rex_return_to_parent").execute("back", {}, signal, undefined, ctx); } };
+    back(signal, ctx = f.ctx) { return tools.get("rexpi_return_to_parent").execute("back", {}, signal, undefined, ctx); } };
 }
 
 test("return tool focuses the exact live parent without launching or sending a task", async t => {
@@ -51,8 +51,8 @@ test("return tool rejects aborted calls and stale source contexts before native 
 test("a root conversation cannot return and inspection does not invent a parent", async t => {
   const f = await active(t), tools = new Map();
   registerConversationTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime: f.runtime }));
-  await assert.rejects(tools.get("rex_return_to_parent").execute("back", {}, undefined, undefined, f.ctx), /no recorded parent/);
-  const result = await tools.get("rex_inspect").execute("inspect", {}, undefined, undefined, f.ctx);
+  await assert.rejects(tools.get("rexpi_return_to_parent").execute("back", {}, undefined, undefined, f.ctx), /no recorded parent/);
+  const result = await tools.get("rexpi_inspect").execute("inspect", {}, undefined, undefined, f.ctx);
   assert.equal(result.details.origin, undefined);
   assert.equal(result.details.messaging, undefined);
   assert.equal(f.w.focusCalls ?? 0, 0);

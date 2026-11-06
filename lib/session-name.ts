@@ -10,7 +10,7 @@ export function sessionName(value: unknown): string {
 }
 export function canonicalName(value: string): string { return value.trim().normalize("NFC").toLowerCase(); }
 export class SessionExistsError extends Error {
-  constructor() { super("A matching Rex session already exists; use rex_open_session to reuse it or choose a different name"); }
+  constructor() { super("A matching Rex session already exists; use rexpi_open_session to reuse it or choose a different name"); }
 }
 /** Cooperative local create reservation. Never steals or expires an uncertain writer's claim. */
 export class SessionClaim {

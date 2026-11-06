@@ -202,22 +202,22 @@ export class CapabilityRuntime {
     if (!this.ensureActive()) return this.inactiveDenial();
     if (this.turnLimitDenied) return blocked("Capability grant turn limit exhausted; tool execution is denied");
     if (!this.allowsTool(toolName)) return blocked("Capability grant denied: tool is not whitelisted");
-    if (toolName === "rex_jump" || toolName === "rex_open_session")
+    if (toolName === "rexpi_jump" || toolName === "rexpi_open_session")
       return blocked("Capability grant denied: this Pi-opening route cannot propagate a grant");
-    if (toolName === "rex_message_send" && !this.grant.returnResults
+    if (toolName === "rexpi_message_send" && !this.grant.returnResults
         && typeof input === "object" && input !== null && (input as { kind?: unknown }).kind === "result")
       return blocked("Capability grant denied: returnResults=false blocks kind=result");
-    if (toolName === "rex_start_pi" || toolName === "rex_delegate") {
+    if (toolName === "rexpi_start_pi" || toolName === "rexpi_delegate") {
       const child = typeof input === "object" && input !== null
         ? (input as { grant?: unknown }).grant : undefined;
       try { this.deriveChildGrant(child); }
       catch (error) { return blocked(error instanceof Error ? error.message : "Capability delegation denied"); }
     }
-    if (toolName === "rex_fanout") {
+    if (toolName === "rexpi_fanout") {
       const children = typeof input === "object" && input !== null
         ? (input as { children?: unknown }).children : undefined;
       if (!Array.isArray(children) || !children.length || children.length > 64)
-        return blocked("Capability delegation denied: rex_fanout requires 1 to 64 explicit children");
+        return blocked("Capability delegation denied: rexpi_fanout requires 1 to 64 explicit children");
       try {
         for (const child of children) this.deriveChildGrant(typeof child === "object" && child !== null
           ? (child as { grant?: unknown }).grant : undefined);

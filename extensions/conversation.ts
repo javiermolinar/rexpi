@@ -8,8 +8,8 @@ export interface ConversationState { runtime?: Runtime; messaging?: MessagingRun
 /** Register only after verified Rex activation. Identity remains evidence, never authority. */
 export function registerConversationTools(pi: ExtensionAPI, current: () => ConversationState): void {
   pi.registerTool({
-    name: "rex_return_to_parent", label: "Return to parent Pi conversation",
-    description: "Focus the exact live parent; fail if unavailable. Cross-session focus needs Rex Remote Control.",
+    name: "rexpi_return_to_parent", label: "Return to parent Pi conversation",
+    description: "Focus the exact live parent Pi conversation.",
     executionMode: "sequential",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_id, _params, signal, _update, ctx) {
@@ -22,8 +22,8 @@ export function registerConversationTools(pi: ExtensionAPI, current: () => Conve
     },
   });
   pi.registerTool({
-    name: "rex_inspect", label: "Inspect Rexpi state",
-    description: "Read identity, parent, up to 64 remembered children and body-free messaging status. Local evidence, not a process-health probe.",
+    name: "rexpi_inspect", label: "Inspect Rexpi state",
+    description: "Read local Rexpi identity, parent/child relationships, and messaging status.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_id, _params, signal, _update, ctx) {

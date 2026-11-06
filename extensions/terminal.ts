@@ -11,13 +11,13 @@ const schema = Type.Object({
   command: Type.Union([
     Type.String({ minLength: 1, maxLength: 16384 }),
     Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 128 }),
-  ], { description: "Prefer literal argv arrays. Strings run via /bin/sh -c." }),
+  ], { description: "Literal argv preferred; strings use /bin/sh -c." }),
   placement: Type.Optional(literalUnion(TERMINAL_PLACEMENTS, "Default right. Floating is inside this Rex tab.")),
-  cwd: Type.Optional(Type.String({ description: "Existing local path; absolute, relative to cwd or ~/…" })),
+  cwd: Type.Optional(Type.String({ description: "Existing working directory; absolute or relative." })),
   title: Type.Optional(Type.String({ maxLength: 120 })),
-  focus: Type.Optional(Type.Boolean({ description: "Default true; false preserves focus." })),
-  keepOpen: Type.Optional(Type.Boolean({ description: "Retain terminal after exit. Default false." })),
-  bounds: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4, description: "Floating [x,y,width,height], fractions inside tab. Default [0.1,0.1,0.8,0.8]." })),
+  focus: Type.Optional(Type.Boolean({ description: "Focus pane; default true." })),
+  keepOpen: Type.Optional(Type.Boolean({ description: "Keep pane after exit; default false." })),
+  bounds: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4, description: "Floating [x,y,width,height] tab fractions; default [0.1,0.1,0.8,0.8]." })),
 }, { additionalProperties: false });
 
 export interface TerminalState { runtime?: Runtime; terminal?: TerminalOpener }
@@ -25,8 +25,8 @@ export function registerTerminalFeatures(pi: ExtensionAPI, current: () => Termin
   const calls = new OutcomeCache<TerminalResult>(4096,
     "Terminal request history is full (4096); reload explicitly before more opens");
   pi.registerTool({
-    name: "rex_open_terminal", label: "Open terminal in Rex",
-    description: "Run a local command in a split, tab or floating pane, with your account permissions.",
+    name: "rexpi_open_terminal", label: "Open terminal in Rex",
+    description: "Run a local command in a Rex split, tab, or floating pane.",
     executionMode: "sequential", parameters: schema,
     async execute(id, params, signal, _update, toolCtx) {
       const { runtime, terminal } = current();
@@ -54,5 +54,5 @@ export function registerTerminalFeatures(pi: ExtensionAPI, current: () => Termin
         },
       });
     }
-  } catch { ctx.ui.notify("Cannot read pi-rex.commands settings; rex_open_terminal remains available", "warning"); }
+  } catch { ctx.ui.notify("Cannot read pi-rex.commands settings; rexpi_open_terminal remains available", "warning"); }
 }

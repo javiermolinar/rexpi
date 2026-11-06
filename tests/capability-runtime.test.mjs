@@ -4,7 +4,7 @@ import { attenuateCapabilityGrant, CapabilityRuntime } from "../lib/capability-r
 import { capabilityDeadline } from "../lib/launch.ts";
 
 function grant(change = {}) {
-  return { tools: ["read", "custom_tool", "rex_start_pi", "rex_delegate", "rex_fanout", "rex_message_send", "rex_return_to_parent"],
+  return { tools: ["read", "custom_tool", "rexpi_start_pi", "rexpi_delegate", "rexpi_fanout", "rexpi_message_send", "rexpi_return_to_parent"],
     readPaths: ["/repo", "/exact[literal]"], writePaths: ["/repo/output"],
     delegation: { maxDepth: 2 }, returnResults: true, turns: 3, timeoutMs: 1000, ...change };
 }
@@ -65,9 +65,9 @@ test("delegation zero and omitted child grants cannot create an ungoverned child
   assert.throws(() => capability.deriveChildOptions({ related: true, grant: child() }), /maxDepth must be greater than zero/);
   const delegated = runtime(t);
   assert.throws(() => delegated.capability.deriveChildOptions({ related: true }), /explicit child grant/);
-  assert.match(delegated.capability.guardTool("rex_start_pi", { related: true }).reason, /explicit child grant/);
-  assert.match(delegated.capability.guardTool("rex_delegate", { task: "task" }).reason, /explicit child grant/);
-  assert.match(delegated.capability.guardTool("rex_fanout", { children: [{ task: "task" }] }).reason, /explicit child grant/);
+  assert.match(delegated.capability.guardTool("rexpi_start_pi", { related: true }).reason, /explicit child grant/);
+  assert.match(delegated.capability.guardTool("rexpi_delegate", { task: "task" }).reason, /explicit child grant/);
+  assert.match(delegated.capability.guardTool("rexpi_fanout", { children: [{ task: "task" }] }).reason, /explicit child grant/);
 });
 
 test("a valid child is explicitly attenuated and propagated without mutating parent arrays", t => {
@@ -80,10 +80,10 @@ test("a valid child is explicitly attenuated and propagated without mutating par
   assert.notEqual(derived.grant, options.grant);
   assert.deepEqual(derived.grant, options.grant);
   assert.equal(derived.returnResults, undefined, "grant returnResults is not focus/result-return setup");
-  parentTools.push("rex_message_send");
+  parentTools.push("rexpi_message_send");
   assert.deepEqual(derived.grant.tools, ["read"], "the validated child is a private parsed copy");
-  assert.equal(capability.guardTool("rex_delegate", { task: "task", grant: options.grant }), undefined);
-  assert.equal(capability.guardTool("rex_fanout", { children: [{ task: "task", grant: options.grant }] }), undefined);
+  assert.equal(capability.guardTool("rexpi_delegate", { task: "task", grant: options.grant }), undefined);
+  assert.equal(capability.guardTool("rexpi_fanout", { children: [{ task: "task", grant: options.grant }] }), undefined);
 });
 
 test("relative delegated paths stay anchored to the parent cwd, not the child launch cwd", t => {
@@ -143,12 +143,12 @@ test("an inherited absolute deadline bounds delayed child consumption", t => {
 
 test("returnResults=false gates only result sends; progress, question, and focus return remain tool-governed", t => {
   const { capability } = runtime(t, grant({ returnResults: false }));
-  assert.match(capability.guardTool("rex_message_send", { kind: "result", nested: true }).reason, /returnResults=false/);
-  assert.equal(capability.guardTool("rex_message_send", { kind: "progress" }), undefined);
-  assert.equal(capability.guardTool("rex_message_send", { kind: "question" }), undefined);
-  assert.equal(capability.guardTool("rex_return_to_parent", {}), undefined);
+  assert.match(capability.guardTool("rexpi_message_send", { kind: "result", nested: true }).reason, /returnResults=false/);
+  assert.equal(capability.guardTool("rexpi_message_send", { kind: "progress" }), undefined);
+  assert.equal(capability.guardTool("rexpi_message_send", { kind: "question" }), undefined);
+  assert.equal(capability.guardTool("rexpi_return_to_parent", {}), undefined);
   const restricted = runtime(t, grant({ tools: ["read"], returnResults: false }));
-  assert.match(restricted.capability.guardTool("rex_message_send", { kind: "progress" }).reason, /not whitelisted/);
+  assert.match(restricted.capability.guardTool("rexpi_message_send", { kind: "progress" }).reason, /not whitelisted/);
 });
 
 test("turn_start permits exactly grant.turns model turns and retains one bounded denial", t => {

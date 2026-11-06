@@ -84,7 +84,7 @@ async function peerPair(t) {
     parent.agent.register(handle); child.agent.register(handle);
     return handle;
   }
-  const cancel = (handle, ctx = parent.ctx) => tools.get("rex_agent_cancel")
+  const cancel = (handle, ctx = parent.ctx) => tools.get("rexpi_agent_cancel")
     .execute("cancel", { handle }, undefined, undefined, ctx);
   return { w, parent, child, tools, childTools, register, cancel };
 }
@@ -99,7 +99,7 @@ test("busy acknowledgement is abort-only, deduplicates concurrently, and retains
   f.child.control.idle = false;
   f.parent.agent.observe(handle, { type: "activity.sample", idle: false, pendingMessages: true });
   const branch = f.child.sm.getBranch().map(entry => entry.id);
-  assert.equal(f.tools.get("rex_agent_cancel").executionMode, "sequential");
+  assert.equal(f.tools.get("rexpi_agent_cancel").executionMode, "sequential");
   const [first, concurrent] = await Promise.all([f.cancel(handle), f.cancel(handle)]);
   assert.deepEqual(concurrent, first);
   assert.equal(first.details.state, "acknowledged"); assert.equal(first.details.reason, "busy");
@@ -174,7 +174,7 @@ test("foreign, self, unrelated, stale, replaced, and source-session-mismatched h
   await assert.rejects(f.parent.agent.cancel(makeHandle({ taskId: handle.taskId }), f.parent.state),
     /Unknown, foreign, or ambiguous/);
   await assert.rejects(f.parent.agent.cancel(handle, { ...f.parent.state, taskId: uuid() }), /related task/);
-  await assert.rejects(f.childTools.get("rex_agent_cancel").execute("self", { handle }, undefined, undefined, f.child.ctx),
+  await assert.rejects(f.childTools.get("rexpi_agent_cancel").execute("self", { handle }, undefined, undefined, f.child.ctx),
     /remote handle/);
   const changedSession = { ...f.parent.ctx, sessionManager: { getSessionId: () => uuid() } };
   await assert.rejects(f.cancel(handle, changedSession), /source conversation changed/);

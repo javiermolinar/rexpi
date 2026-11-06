@@ -101,7 +101,7 @@ test("workspace appearing after reservation is reused and the preflight claim is
 });
 test("fresh launches never reuse or duplicate an existing named workspace", async t => {
   const a = await active(t); named(a, "Tempo");
-  await assert.rejects(launcher(a).launch("fresh", { sessionName: "tempo", cwd: a.root, focus: false }, a.root), /rex_open_session/);
+  await assert.rejects(launcher(a).launch("fresh", { sessionName: "tempo", cwd: a.root, focus: false }, a.root), /rexpi_open_session/);
   await assert.rejects(launcher(a).launch("tab", { sessionName: "New", placement: "tab" }, a.root), /session placement/);
   await assert.rejects(launcher(a).launch("split", { sessionName: "New", related: true }, a.root), /session placement/);
   assert.equal(a.w.created.length, 0);

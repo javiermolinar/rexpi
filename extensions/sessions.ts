@@ -18,14 +18,14 @@ export function registerSessionTool(pi: ExtensionAPI, current: () => { runtime?:
   const calls = new OutcomeCache<OpenSessionResult>(256,
     "Session request history is full; reload explicitly before more requests");
   pi.registerTool({
-    name: "rex_open_session", label: "Open named Rex session",
-    description: "Select a unique named workspace, or create empty Pi if absent. Ambiguous names fail. App switching needs Rex Remote Control; no restart restoration.",
+    name: "rexpi_open_session", label: "Open named Rex session",
+    description: "Open or create a named Rex workspace with an empty Pi.",
     executionMode: "sequential",
     parameters: Type.Object({
-      sessionName: Type.String({ minLength: 1, maxLength: 120, description: "Exact workspace name; case-insensitive matching." }),
-      query: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Required if absent: path or zoxide query; . means cwd. Ignored on reuse." })),
-      title: Type.Optional(Type.String({ maxLength: 120, description: "Initial tab title; ignored on reuse." })),
-      focus: Type.Optional(Type.Boolean({ description: "Default true; false preserves focus." })),
+      sessionName: Type.String({ minLength: 1, maxLength: 120, description: "Case-insensitive workspace name." }),
+      query: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Path or zoxide query for creation; ignored on reuse." })),
+      title: Type.Optional(Type.String({ maxLength: 120, description: "Initial tab title for creation." })),
+      focus: Type.Optional(Type.Boolean({ description: "Focus workspace; default true." })),
     }, { additionalProperties: false }),
     async execute(id, params, signal, _update, ctx) {
       const { runtime, sessions } = current();

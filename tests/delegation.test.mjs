@@ -15,7 +15,7 @@ import { registerDelegationTool } from "../extensions/delegation.ts";
 import { active, binding } from "./fixtures.mjs";
 
 const extension = fileURLToPath(new URL("../extensions/index.ts", import.meta.url));
-const grant = (overrides = {}) => ({ tools: ["read", "rex_message_send", "rex_agent_complete"], readPaths: ["."], writePaths: [],
+const grant = (overrides = {}) => ({ tools: ["read", "rexpi_message_send", "rexpi_agent_complete"], readPaths: ["."], writePaths: [],
   delegation: { maxDepth: 0 }, returnResults: false, turns: 3, timeoutMs: 10_000, ...overrides });
 async function fixture(t, options = {}) {
   const a = await active(t), sm = SessionManager.create(a.root, join(a.root, "sessions"), { id: "test-session" });
@@ -126,7 +126,7 @@ test("rejected grants create nothing and creation/binding failures preserve sepa
   await assert.rejects(f.delegation.delegate("blank-task", " \n", { grant: grant() }, f.root), /task/);
   assert.equal(f.w.created.length, 0);
   await assert.rejects(f.delegation.delegate("missing-completion-tool", "task", { grant: grant({ tools: ["read"] }) }, f.root),
-    /rex_agent_complete/);
+    /rexpi_agent_complete/);
   assert.equal(f.w.created.length, 0);
   f.w.failCreate = true;
   const unknown = await f.delegation.delegate("unknown-create", "task", { grant: grant() }, f.root);
@@ -139,12 +139,12 @@ test("rejected grants create nothing and creation/binding failures preserve sepa
   assert.equal(unbound.activity, "unknown"); assert.equal(unbound.result, "pending");
 });
 
-test("rex_delegate tool preserves task and options through the existing composer", async t => {
+test("rexpi_delegate tool preserves task and options through the existing composer", async t => {
   const f = await fixture(t), tools = new Map();
   let current = { runtime: f.runtime, delegation: f.delegation, messaging: f.messaging, cache: f.cache };
   registerDelegationTool({ registerTool: tool => tools.set(tool.name, tool) }, () => current);
-  assert.deepEqual([...tools.keys()], ["rex_delegate"]);
-  const tool = tools.get("rex_delegate"), task = "@literal /not-a-command $(unchanged)";
+  assert.deepEqual([...tools.keys()], ["rexpi_delegate"]);
+  const tool = tools.get("rexpi_delegate"), task = "@literal /not-a-command $(unchanged)";
   const input = { task, grant: grant(), focus: false, thinking: "high" };
   const result = await tool.execute("tool-delegation", input, undefined, undefined, f.ctx);
   assert.equal(result.details.handle.requestId, "tool-delegation");

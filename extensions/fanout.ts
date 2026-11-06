@@ -29,8 +29,8 @@ function origin(execution: FanoutExecution, runtime?: Runtime): Identity {
 }
 export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolState): void {
   pi.registerTool({
-    name: "rex_fanout", label: "Delegate bounded child tasks",
-    description: "Fan out.",
+    name: "rexpi_fanout", label: "Delegate bounded child tasks",
+    description: "Launch a bounded batch of supervised subagents with per-child tasks and grants.",
     executionMode: "sequential",
     parameters: Type.Object({
       children: Type.Array(child, { minItems: 1, maxItems: 64 }),
@@ -62,8 +62,8 @@ export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolS
     },
   });
   pi.registerTool({
-    name: "rex_join", label: "Inspect fan-out outcomes",
-    description: "Join.",
+    name: "rexpi_join", label: "Inspect fan-out outcomes",
+    description: "Read preserved outcomes for one fan-out without launching work.",
     executionMode: "sequential",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ fanoutId: Type.String({ minLength: 1, maxLength: 1024 }) }, { additionalProperties: false }),

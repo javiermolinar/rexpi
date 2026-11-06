@@ -16,8 +16,8 @@ export interface DelegationToolState {
 }
 export function registerDelegationTool(pi: ExtensionAPI, current: () => DelegationToolState): void {
   pi.registerTool({
-    name: "rex_delegate", label: "Delegate a scoped agent task",
-    description: "Task.",
+    name: "rexpi_delegate", label: "Delegate a scoped agent task",
+    description: "Launch one supervised subagent with an explicit task and capability grant.",
     executionMode: "sequential",
     parameters: Type.Object({
       task: Type.String({ minLength: 1, maxLength: 16384 }),

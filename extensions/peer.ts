@@ -18,15 +18,15 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
     return requireFeature(runtime, peer, sessionId);
   };
   pi.registerTool({
-    name: "rex_read_conversation", label: "Read a related Pi conversation",
-    description: "Read related Pi history without model work. Head/tail, since/type filters, optional text; <=100/48 KiB. Sensitive data.",
+    name: "rexpi_read_conversation", label: "Read a related Pi conversation",
+    description: "Read bounded history from a related Pi without triggering model work.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
       target,
       view: Type.Optional(literalUnion(["branch", "context"] as const, "branch=active history; context=compaction applied. Default branch.")),
       direction: Type.Optional(literalUnion(["head", "tail"] as const)),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Maximum entries; default 20." })),
-      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, description: "Previous response's next value; omit to restart." })),
+      cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2048, description: "Previous response's next cursor." })),
       since: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
       types: Type.Optional(Type.Array(Type.String({ pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }),
         { maxItems: 16, uniqueItems: true })),
@@ -44,8 +44,8 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
   const calls = new Map<string, { digest: string; result: Promise<PeerSendResult> }>();
   const logicals = new Map<string, { digest: string; result: Promise<PeerSendResult> }>();
   pi.registerTool({
-    name: "rex_peer_message_send", label: "Message a related live Pi",
-    description: "Send attributed custom peer text with steer/followUp. Envelope <=32 KiB; request <=40 KiB. Accepted is not processing/completion; never auto-retry failures.",
+    name: "rexpi_peer_message_send", label: "Message a related live Pi",
+    description: "Send attributed text to a related live Pi with steer or follow-up delivery.",
     executionMode: "sequential",
     parameters: Type.Object({
       target,
@@ -54,10 +54,10 @@ export function registerPeerTools(pi: ExtensionAPI, current: () => PeerState): v
       runtimeId: Type.String({ pattern: UUID_PATTERN }),
       inReplyTo: Type.Optional(Type.String({ pattern: UUID_PATTERN })),
       kind: literalUnion(MESSAGE_KINDS),
-      text: Type.String({ minLength: 1, maxLength: 32768, description: "Aggregate 32/40 KiB envelope/request limits apply." }),
+      text: Type.String({ minLength: 1, maxLength: 32768 }),
       delivery: literalUnion(["steer", "followUp"] as const),
       triggerTurn: Type.Boolean(),
-      id: Type.Optional(Type.String({ maxLength: 36, pattern: UUID_PATTERN, description: "Stable request UUID; omit to allocate once." })),
+      id: Type.Optional(Type.String({ maxLength: 36, pattern: UUID_PATTERN, description: "Stable UUID; omit to allocate once." })),
     }, { additionalProperties: false }),
     async execute(toolCallId, params, signal, _update, ctx) {
       const payload = { target: params.target, requestId: params.requestId, runId: params.runId,

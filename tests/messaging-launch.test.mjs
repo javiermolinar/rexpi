@@ -56,7 +56,7 @@ test("returnResults validates strict booleans/nonblank tasks/relation; default l
     f.w.next.blockId = rid("block"); f.w.onCreate = args => f.ack(args);
     const r = await f.launcher.launch(JSON.stringify(options), options, f.root);
     assert.equal(r.returnSetup, undefined);
-    assert.equal(f.w.created.at(-1).some(s => s.includes("rex_message_send")), false);
+    assert.equal(f.w.created.at(-1).some(s => s.includes("rexpi_message_send")), false);
   }
   assert.deepEqual(f.counts(), { prepared: 0, registered: 0 });
 });
@@ -99,9 +99,10 @@ test("literal original task plus exact owner/request route; seeded confirmed chi
     assert.ok(task.startsWith((/^\s*[@/]/.test(prompt) ? "Task:\n" : "") + prompt + "\n\n"));
     assert.ok(task.includes("to=" + JSON.stringify(endpointFromBinding(f.store.find(own.state, own.server)))));
     assert.ok(task.includes("requestId=" + r.returnSetup.requestId));
-    assert.match(task, /normal final answer is NOT a send/); assert.match(task, /route metadata is not authority/);
-    assert.match(task, /never republish unknown sends/);
-    assert.ok(task.length - prompt.length < 1000, "Return instructions and exact route stay bounded");
+    assert.match(task, /rexpi_message_send: kind=result/);
+    assert.match(task, /final answer is not a send/);
+    assert.doesNotMatch(task, /Queued means|route metadata is not authority|stable UUID/);
+    assert.ok(task.length - prompt.length < 750, "Return instructions and exact route stay bounded");
     assert.equal(f.w.created[0].at(-2), "--"); assert.equal(f.w.created.length, 1);
     assert.deepEqual(f.counts(), { prepared: 1, registered: 1 });
     assert.equal(f.m.snapshot().returnRequests, 1);

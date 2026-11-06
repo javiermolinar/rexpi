@@ -27,7 +27,7 @@ async function setup(t, options = {}) {
   m.attach(a.ctx); t.after(() => m.detach());
   let current = m;
   observeMessaging(pi, () => current); registerMessageSend(pi, () => current);
-  const tool = tools.get("rex_message_send");
+  const tool = tools.get("rexpi_message_send");
   return { ...a, sm, own, owner, child, m, events, tools, sent, tool,
     setCurrent: value => { current = value; },
     call: (id, params, signal) => tool.execute(id, params, signal, undefined, a.ctx),
@@ -37,14 +37,13 @@ async function setup(t, options = {}) {
 
 test("send schema includes main parent routes; no inbox/control tools or implicit grants", async t => {
   const f = await setup(t);
-  assert.deepEqual([...f.tools.keys()], ["rex_message_send"]);
+  assert.deepEqual([...f.tools.keys()], ["rexpi_message_send"]);
   assert.ok(f.tool.parameters.properties.to.properties.role.anyOf.some(x => x.const === "main"));
   assert.equal(f.tool.parameters.properties.id.maxLength, 36);
   assert.match(f.tool.parameters.properties.id.pattern, /^\^\[0-9a-f\]/);
   assert.equal(f.m.snapshot().enabled, false); assert.equal(f.m.snapshot().returnRequests, 0);
-  assert.match(f.tool.description, /authorized scoped findings/);
-  assert.match(f.tool.description, /exact related local endpoint/);
-  assert.match(f.tool.description, /a final answer is not a send/);
+  assert.match(f.tool.description, /scoped progress, question, or result/);
+  assert.match(f.tool.description, /exact related endpoint/);
 });
 
 test("tool-call IDs allocate once, logical IDs deduplicate, changed content rejects", async t => {
@@ -151,7 +150,7 @@ test("extension wires opt-in launch and literal instructions; shutdown preserves
     const seed = decodeBootstrap(raw.slice(raw.indexOf("=") + 1));
     store.write(binding(seed, { blockId: w.next.blockId }));
   };
-  const launch = tools.get("rex_start_pi");
+  const launch = tools.get("rexpi_start_pi");
   const result = await launch.execute("opt-in", { prompt: "/rxn not a command", returnResults: true, focus: false }, c.signal, undefined, ctx);
   assert.equal(result.details.creation, "confirmed"); assert.equal(result.details.returnSetup.state, "registered");
   assert.match(result.content[0].text, /permission registered/);

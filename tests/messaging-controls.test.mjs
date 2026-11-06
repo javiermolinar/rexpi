@@ -35,10 +35,10 @@ async function setup(t, options = {}) {
   return { ...a, m, sm, sent, timers, notices, tools, commands, owner, child, box,
     setCurrent(value) { current = value; },
     async command(action, ctx = a.ctx, signal) {
-      const result = await tools.get("rex_message_control").execute("control", { action }, signal, undefined, ctx);
+      const result = await tools.get("rexpi_message_control").execute("control", { action }, signal, undefined, ctx);
       return { text: result.content[0].text, details: result.details };
     },
-    inbox(after, signal) { return tools.get("rex_message_inbox").execute("inspect", { after }, signal, undefined, a.ctx); },
+    inbox(after, signal) { return tools.get("rexpi_message_inbox").execute("inspect", { after }, signal, undefined, a.ctx); },
     async register() { const ticket = await m.prepareReturn(); tickets.set(ticket.requestId, ticket);
       await m.registerReturn(ticket, child); await m.poll(); await flush(); return ticket; },
     message(requestId, text = "unprocessed finding") { const ticket = tickets.get(requestId);
@@ -185,17 +185,17 @@ test("detach used by reload/shutdown stops timers and never restores tickets on 
 test("controls reject bad input/unavailable runtime, register no panels and do not enable on errors", async t => {
   const f = await setup(t);
   assert.deepEqual([...f.commands.keys()], []);
-  assert.deepEqual([...f.tools.keys()], ["rex_message_control", "rex_message_inbox"]);
-  assert.equal(f.tools.get("rex_message_inbox").annotations.readOnlyHint, true);
-  assert.equal(f.tools.get("rex_message_control").executionMode, "sequential");
-  assert.deepEqual(f.tools.get("rex_message_control").parameters.properties.action.anyOf.map(value => value.const), ["status", "observe", "off"]);
+  assert.deepEqual([...f.tools.keys()], ["rexpi_message_control", "rexpi_message_inbox"]);
+  assert.equal(f.tools.get("rexpi_message_inbox").annotations.readOnlyHint, true);
+  assert.equal(f.tools.get("rexpi_message_control").executionMode, "sequential");
+  assert.deepEqual(f.tools.get("rexpi_message_control").parameters.properties.action.anyOf.map(value => value.const), ["status", "observe", "off"]);
   for (const action of ["replay", "on", "inbox", ""]) {
     await assert.rejects(f.command(action), /Invalid messaging control/);
     assert.equal(f.m.snapshot().enabled, false);
   }
   const changed = { ...f.ctx, sessionManager: { getSessionId: () => "changed" } };
   await assert.rejects(f.command("observe", changed), /conversation changed/);
-  await assert.rejects(f.tools.get("rex_message_inbox").execute("stale", {}, undefined, undefined, changed), /conversation changed/);
+  await assert.rejects(f.tools.get("rexpi_message_inbox").execute("stale", {}, undefined, undefined, changed), /conversation changed/);
   const c = new AbortController(); c.abort();
   await assert.rejects(f.command("observe", f.ctx, c.signal));
   assert.equal(f.m.snapshot().enabled, false);

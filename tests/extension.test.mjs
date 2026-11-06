@@ -9,7 +9,7 @@ import { BOOTSTRAP_ENV, childBootstrap, decodeBootstrap, encodeBootstrap } from 
 import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, MAX_CAPABILITY_DELEGATION_DEPTH, decodeCapabilityDeadline, decodeCapabilityGrant, encodeCapabilityGrant } from "../lib/launch.ts";
 import { AGENT_BOOTSTRAP_ENV, AGENT_NOTIFY_SETTLEMENT_ENV, agentHandleFromIdentity, encodeAgentBootstrap } from "../lib/agent.ts";
 
-const enforcementGrant = (change = {}) => ({ tools: ["rex_start_pi"], readPaths: ["/repo"], writePaths: ["/repo/out"],
+const enforcementGrant = (change = {}) => ({ tools: ["rexpi_start_pi"], readPaths: ["/repo"], writePaths: ["/repo/out"],
   delegation: { maxDepth: 1 }, returnResults: false, turns: 2, timeoutMs: 10_000, ...change });
 
 function fixture(t, overrides = {}, settings = {}) {
@@ -42,23 +42,25 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.equal(f.w.calls.length, 0);
   assert.equal(f.tools.size, 0);
   await f.events.get("session_start")({}, f.ctx);
-  assert.ok(f.tools.has("rex_start_pi"));
-  assert.ok(f.tools.has("rex_message_send"));
-  assert.ok(f.tools.get("rex_start_pi").parameters.properties.returnResults);
-  assert.ok(f.tools.has("rex_message_inbox"));
-  assert.ok(f.tools.get("rex_start_pi").parameters.properties.project);
-  assert.equal(f.tools.has("rex_jump"), false);
-  assert.ok(f.tools.has("rex_open_terminal"));
-  assert.ok(f.tools.has("rex_open_session"));
-  assert.ok(f.tools.has("rex_agent_stop"));
-  assert.equal(f.tools.get("rex_agent_stop").description, "Stop.");
-  assert.equal(f.tools.get("rex_agent_stop").executionMode, "sequential");
-  assert.equal(f.tools.get("rex_agent_stop").parameters.properties.authorize.const, true);
-  assert.ok(f.tools.get("rex_start_pi").parameters.properties.sessionName);
-  assert.equal(f.tools.get("rex_start_pi").executionMode, "sequential");
-  assert.ok(f.tools.has("rex_return_to_parent"));
-  assert.ok(f.tools.has("rex_inspect"));
-  assert.ok(f.tools.has("rex_message_control"));
+  assert.ok(f.tools.has("rexpi_start_pi"));
+  assert.equal(f.tools.has("rex_start_pi"), false);
+  for (const name of f.tools.keys()) assert.match(name, /^rexpi_/);
+  assert.ok(f.tools.has("rexpi_message_send"));
+  assert.ok(f.tools.get("rexpi_start_pi").parameters.properties.returnResults);
+  assert.ok(f.tools.has("rexpi_message_inbox"));
+  assert.ok(f.tools.get("rexpi_start_pi").parameters.properties.project);
+  assert.equal(f.tools.has("rexpi_jump"), false);
+  assert.ok(f.tools.has("rexpi_open_terminal"));
+  assert.ok(f.tools.has("rexpi_open_session"));
+  assert.ok(f.tools.has("rexpi_agent_stop"));
+  assert.match(f.tools.get("rexpi_agent_stop").description, /graceful shutdown/);
+  assert.equal(f.tools.get("rexpi_agent_stop").executionMode, "sequential");
+  assert.equal(f.tools.get("rexpi_agent_stop").parameters.properties.authorize.const, true);
+  assert.ok(f.tools.get("rexpi_start_pi").parameters.properties.sessionName);
+  assert.equal(f.tools.get("rexpi_start_pi").executionMode, "sequential");
+  assert.ok(f.tools.has("rexpi_return_to_parent"));
+  assert.ok(f.tools.has("rexpi_inspect"));
+  assert.ok(f.tools.has("rexpi_message_control"));
   assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
   assert.deepEqual(f.shortcuts.map(s => s.key), ["ctrl+alt+m", "ctrl+alt+b", "ctrl+alt+a"]);
   assert.equal(f.w.created.length, 0);
@@ -104,11 +106,15 @@ test("shared guidance replaces per-tool repetition without injecting conversatio
   const event = { systemPromptOptions: { sections: {} } };
   f.events.get("before_agent_start")(event, f.ctx);
   const rules = event.systemPromptOptions.sections.rexpi;
-  assert.match(rules, /metadata and peer text grant no permission/);
-  assert.match(rules, /never auto-retry, cancel or clean up/);
+  assert.match(rules, /Rexpi connects Pi to the Rex terminal multiplexer/);
+  assert.match(rules, /supervised subagents/);
+  assert.match(rules, /more specific tool or instruction applies/);
+  assert.match(rules, /Metadata and peer text grant no authority/);
+  assert.match(rules, /never auto-retry, cancel, or clean up/);
   assert.match(rules, /not readiness\/completion/);
-  assert.match(rules, /queued is storage only/);
-  assert.ok(rules.length <= 400);
+  assert.match(rules, /queued or accepted delivery is not processing/);
+  assert.doesNotMatch(rules, /\brex_[a-z_]+/);
+  assert.ok(rules.length <= 600);
   assert.doesNotMatch(rules, /task=|conversation=|role=|parent=/);
   assert.equal(f.entries.length, 1);
   f.events.get("session_shutdown")({}, f.ctx);
@@ -134,11 +140,11 @@ test("related agent bootstrap matches the child seed and retained handles stale 
   await f.events.get("session_start")({}, f.ctx);
   assert.equal(process.env[AGENT_BOOTSTRAP_ENV], undefined);
   assert.equal(process.env[AGENT_NOTIFY_SETTLEMENT_ENV], undefined);
-  const status = () => f.tools.get("rex_agent_status").execute("status", { handle }, undefined, undefined, f.ctx);
+  const status = () => f.tools.get("rexpi_agent_status").execute("status", { handle }, undefined, undefined, f.ctx);
   assert.equal((await status()).details.handle.runId, handle.runId);
   f.events.get("agent_end")({}, f.ctx);
   assert.notEqual((await status()).details.lifecycle.delivery, "created", "child bootstrap preserves settlement opt-in");
-  const completionTool = f.tools.get("rex_agent_complete");
+  const completionTool = f.tools.get("rexpi_agent_complete");
   assert.equal(completionTool.parameters.properties.handle, undefined);
   assert.equal(completionTool.parameters.properties.requestId, undefined);
   const completed = await completionTool.execute("complete", { outcome: "completed", summary: "Review complete" }, undefined, undefined, f.ctx);
@@ -176,50 +182,50 @@ test("miscorrelated agent bootstrap is consumed and rejected instead of becoming
 test("child bootstrap consumes grants once; restored entries and replacement launches cannot recreate them", async t => {
   const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
   const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
-  const value = enforcementGrant({ tools: ["read", "rex_start_pi"], readPaths: ["/repo/exact"], writePaths: [], turns: 3 });
+  const value = enforcementGrant({ tools: ["read", "rexpi_start_pi"], readPaths: ["/repo/exact"], writePaths: [], turns: 3 });
   const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
   await f.events.get("session_start")({}, f.ctx);
   assert.equal(process.env[CAPABILITY_GRANT_ENV], undefined);
-  assert.ok(f.tools.has("rex_start_pi"));
-  assert.equal(f.tools.has("rex_open_terminal"), false, "only whitelisted Rex tools register");
+  assert.ok(f.tools.has("rexpi_start_pi"));
+  assert.equal(f.tools.has("rexpi_open_terminal"), false, "only whitelisted Rexpi tools register");
   assert.equal(f.entries.some(entry => JSON.stringify(entry).includes("readPaths")), false);
-  const parameters = f.tools.get("rex_start_pi").parameters.properties.grant;
+  const parameters = f.tools.get("rexpi_start_pi").parameters.properties.grant;
   assert.deepEqual(parameters.required, ["tools", "readPaths", "writePaths", "delegation", "returnResults", "turns", "timeoutMs"]);
   assert.equal(parameters.additionalProperties, false);
   assert.equal(parameters.properties.delegation.properties.maxDepth.maximum, MAX_CAPABILITY_DELEGATION_DEPTH);
   f.entries.push({ type: "custom", customType: "pi-rex.orientation", data: { ...seed, grant: value } });
   await f.events.get("session_tree")({}, f.ctx);
-  await assert.rejects(f.tools.get("rex_start_pi").execute("replacement-child", { prompt: JSON.stringify(value), role: "review" },
+  await assert.rejects(f.tools.get("rexpi_start_pi").execute("replacement-child", { prompt: JSON.stringify(value), role: "review" },
     undefined, undefined, f.ctx), /revoked/);
   assert.equal(f.w.created.length, 0, "restored grant-like entries cannot renew authority or create an ungoverned child");
 });
 
-test("granted runtimes filter Rex registration and globally gate built-in, custom, nested, result, and Pi-opening calls", async t => {
+test("granted runtimes filter Rexpi registration and globally gate built-in, custom, nested, result, and Pi-opening calls", async t => {
   const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
   const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
-  const value = enforcementGrant({ tools: ["read", "rex_message_send", "rex_return_to_parent", "rex_open_session", "rex_jump"],
+  const value = enforcementGrant({ tools: ["read", "rexpi_message_send", "rexpi_return_to_parent", "rexpi_open_session", "rexpi_jump"],
     delegation: { maxDepth: 0 } });
   const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
   await f.events.get("session_start")({}, f.ctx);
-  assert.deepEqual([...f.tools.keys()].sort(), ["read", "rex_message_send", "rex_open_session", "rex_return_to_parent"]);
+  assert.deepEqual([...f.tools.keys()].sort(), ["read", "rexpi_message_send", "rexpi_open_session", "rexpi_return_to_parent"]);
   const guard = (toolName, input = {}) => f.events.get("tool_call")({ toolName, input }, f.ctx);
   assert.equal(guard("read"), undefined);
   assert.equal(guard("read", { nested: true }), undefined);
   for (const name of ["bash", "write", "custom", "codemode"]) assert.equal(guard(name).block, true);
-  assert.match(guard("rex_message_send", { kind: "result" }).reason, /returnResults=false/);
-  assert.equal(guard("rex_message_send", { kind: "progress" }), undefined);
-  assert.equal(guard("rex_message_send", { kind: "question" }), undefined);
-  assert.equal(guard("rex_return_to_parent"), undefined, "focus return is not result-return permission");
-  for (const name of ["rex_jump", "rex_open_session"]) assert.match(guard(name).reason, /cannot propagate a grant/);
+  assert.match(guard("rexpi_message_send", { kind: "result" }).reason, /returnResults=false/);
+  assert.equal(guard("rexpi_message_send", { kind: "progress" }), undefined);
+  assert.equal(guard("rexpi_message_send", { kind: "question" }), undefined);
+  assert.equal(guard("rexpi_return_to_parent"), undefined, "focus return is not result-return permission");
+  for (const name of ["rexpi_jump", "rexpi_open_session"]) assert.match(guard(name).reason, /cannot propagate a grant/);
 });
 
-test("rex_start_pi requires and propagates an explicit attenuated child grant", async t => {
+test("rexpi_start_pi requires and propagates an explicit attenuated child grant", async t => {
   const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
   const seed = { ...childBootstrap(parent, true, "review", server), piSessionId: "factory-session" };
-  const value = enforcementGrant({ tools: ["rex_start_pi", "read"] });
+  const value = enforcementGrant({ tools: ["rexpi_start_pi", "read"] });
   const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
   await f.events.get("session_start")({}, f.ctx);
-  const start = f.tools.get("rex_start_pi");
+  const start = f.tools.get("rexpi_start_pi");
   await assert.rejects(start.execute("missing-grant", { related: true }, undefined, undefined, f.ctx), /explicit child grant/);
   assert.equal(f.w.created.length, 0);
   const store = new BindingStore(join(f.root, "bindings"));
@@ -250,7 +256,7 @@ test("delegation zero rejects even a schema-valid child before native creation",
   const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(value) });
   await f.events.get("session_start")({}, f.ctx);
   const childGrant = enforcementGrant({ tools: [], readPaths: [], writePaths: [], delegation: { maxDepth: 0 } });
-  await assert.rejects(f.tools.get("rex_start_pi").execute("depth-zero", { related: true, grant: childGrant },
+  await assert.rejects(f.tools.get("rexpi_start_pi").execute("depth-zero", { related: true, grant: childGrant },
     undefined, undefined, f.ctx), /maxDepth must be greater than zero/);
   assert.equal(f.w.created.length, 0);
 });
@@ -274,8 +280,8 @@ test("turn_start enforces the exact boundary once; omitted grants retain ordinar
   await plain.events.get("session_start")({}, plain.ctx);
   assert.equal(plain.events.get("tool_call")({ toolName: "anything", input: {} }, plain.ctx), undefined);
   plain.events.get("turn_start")({}, plain.ctx);
-  assert.ok(plain.tools.has("rex_start_pi"));
-  assert.ok(plain.tools.has("rex_open_session"));
+  assert.ok(plain.tools.has("rexpi_start_pi"));
+  assert.ok(plain.tools.has("rexpi_open_session"));
 });
 
 test("an unrelated session cannot adopt a grant envelope", async t => {
@@ -341,10 +347,10 @@ test("configured commands register only after verification and do not run during
   assert.equal(f.w.created.length, 1);
   assert.equal(f.w.created[0].at(-1), "a path with spaces");
 });
-test("rex_open_terminal is independent from the configured command catalog", async t => {
+test("rexpi_open_terminal is independent from the configured command catalog", async t => {
   const f = fixture(t, {}, { "pi-rex": { commands: "invalid catalog" } });
   await f.events.get("session_start")({}, f.ctx);
-  const tool = f.tools.get("rex_open_terminal");
+  const tool = f.tools.get("rexpi_open_terminal");
   assert.ok(tool);
   const result = await tool.execute("generic", { command: ["/bin/echo", "not a catalog entry"], placement: "floating" },
     new AbortController().signal, undefined, f.ctx);
@@ -353,7 +359,7 @@ test("rex_open_terminal is independent from the configured command catalog", asy
   assert.equal(f.w.created.length, 1);
   assert.equal(f.w.layerRequests[0].layout.block.options.command.at(-1), "not a catalog entry");
 });
-test("rex_start_pi opens project paths with the requested placement and no extra slash commands", async t => {
+test("rexpi_start_pi opens project paths with the requested placement and no extra slash commands", async t => {
   for (const placement of ["session", "right", "down", "tab"]) await t.test(placement, async t => {
     const f = fixture(t);
     await f.events.get("session_start")({}, f.ctx);
@@ -362,7 +368,7 @@ test("rex_start_pi opens project paths with the requested placement and no extra
       const raw = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
       store.write(binding(decodeBootstrap(raw.slice(raw.indexOf("=") + 1)), { blockId: f.w.next.blockId }));
     };
-    const result = await f.tools.get("rex_start_pi").execute("project", { project: f.root, placement, focus: false },
+    const result = await f.tools.get("rexpi_start_pi").execute("project", { project: f.root, placement, focus: false },
       new AbortController().signal, undefined, f.ctx);
     assert.deepEqual(result.details.project, { directory: f.root, matchedBy: "path" });
     assert.equal(result.details.placement, placement);
@@ -374,7 +380,7 @@ test("rex_start_pi opens project paths with the requested placement and no extra
     assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
   });
 });
-test("rex_start_pi resolves zoxide projects without forcing new-tab placement", async t => {
+test("rexpi_start_pi resolves zoxide projects without forcing new-tab placement", async t => {
   const bin = sandbox(t); symlinkSync("/bin/echo", join(bin, "zoxide"));
   const f = fixture(t, { PATH: bin });
   let lookups = 0;
@@ -391,7 +397,7 @@ test("rex_start_pi resolves zoxide projects without forcing new-tab placement", 
     const raw = args.find(arg => arg.startsWith(BOOTSTRAP_ENV + "="));
     store.write(binding(decodeBootstrap(raw.slice(raw.indexOf("=") + 1)), { blockId: f.w.next.blockId }));
   };
-  const result = await f.tools.get("rex_start_pi").execute("pr-inbox", { project: "pr-inbox", focus: false },
+  const result = await f.tools.get("rexpi_start_pi").execute("pr-inbox", { project: "pr-inbox", focus: false },
     undefined, undefined, f.ctx);
   assert.equal(result.details.project.matchedBy, "zoxide");
   assert.equal(result.details.placement, "session");
@@ -412,7 +418,7 @@ test("pending project lookup cannot transfer to a replacement runtime or repeat 
     return { code: 0, stdout: f.root + "\n", stderr: "" };
   };
   await f.events.get("session_start")({}, f.ctx);
-  const call = () => f.tools.get("rex_start_pi").execute("pending-project", { project: "pr-inbox" }, undefined, undefined, f.ctx)
+  const call = () => f.tools.get("rexpi_start_pi").execute("pending-project", { project: "pr-inbox" }, undefined, undefined, f.ctx)
     .then(value => ({ value }), error => ({ error }));
   const first = call();
   await waiting;
@@ -424,10 +430,10 @@ test("pending project lookup cannot transfer to a replacement runtime or repeat 
   assert.equal((await call()).error, a.error);
   assert.equal(lookups, 1); assert.equal(f.w.created.length, 0);
 });
-test("rex_open_session reuses existing workspaces without Pi launch or task parameters", async t => {
+test("rexpi_open_session reuses existing workspaces without Pi launch or task parameters", async t => {
   const f = fixture(t);
   await f.events.get("session_start")({}, f.ctx);
-  const tool = f.tools.get("rex_open_session");
+  const tool = f.tools.get("rexpi_open_session");
   assert.equal(tool.parameters.properties.prompt, undefined);
   const result = await tool.execute("reuse", { sessionName: "Source", focus: false },
     new AbortController().signal, undefined, f.ctx);
@@ -437,9 +443,9 @@ test("rex_open_session reuses existing workspaces without Pi launch or task para
 });
 test("creation tool outcomes survive tree replacement without new native work", async t => {
   const cases = [
-    ["terminal", "rex_open_terminal", () => ({ command: ["/bin/echo"] })],
-    ["project launch", "rex_start_pi", f => ({ project: f.root, focus: false })],
-    ["named session", "rex_open_session", f => ({ sessionName: "New workspace", query: f.root, focus: false })],
+    ["terminal", "rexpi_open_terminal", () => ({ command: ["/bin/echo"] })],
+    ["project launch", "rexpi_start_pi", f => ({ project: f.root, focus: false })],
+    ["named session", "rexpi_open_session", f => ({ sessionName: "New workspace", query: f.root, focus: false })],
   ];
   for (const [name, tool, input] of cases) await t.test(name, async t => {
     const f = fixture(t);
@@ -458,9 +464,9 @@ test("creation tool outcomes survive tree replacement without new native work", 
 });
 test("creation tool rejections survive tree replacement", async t => {
   const cases = [
-    ["terminal", "rex_open_terminal", { command: "" }],
-    ["project launch", "rex_start_pi", { project: "" }],
-    ["named session", "rex_open_session", { sessionName: "" }],
+    ["terminal", "rexpi_open_terminal", { command: "" }],
+    ["project launch", "rexpi_start_pi", { project: "" }],
+    ["named session", "rexpi_open_session", { sessionName: "" }],
   ];
   for (const [name, tool, input] of cases) await t.test(name, async t => {
     const f = fixture(t);
@@ -480,7 +486,7 @@ test("a pending terminal creation keeps its original outcome fence across tree r
   t.after(() => release());
   f.w.failCreate = true;
   f.w.onCreate = async () => { entered(); await gate; };
-  const call = () => f.tools.get("rex_open_terminal").execute("pending-create", { command: ["/bin/echo"] }, undefined, undefined, f.ctx)
+  const call = () => f.tools.get("rexpi_open_terminal").execute("pending-create", { command: ["/bin/echo"] }, undefined, undefined, f.ctx)
     .then(value => ({ value }), error => ({ error }));
   const first = call();
   await waiting;
@@ -544,7 +550,7 @@ test("return shortcut supports opt-out and rejects malformed modifier strings", 
 test("inspection replaces identity/status commands and follows current state without enabling returns", async t => {
   const f = fixture(t);
   await f.events.get("session_start")({}, f.ctx);
-  const inspect = () => f.tools.get("rex_inspect").execute("inspect", {}, undefined, undefined, f.ctx);
+  const inspect = () => f.tools.get("rexpi_inspect").execute("inspect", {}, undefined, undefined, f.ctx);
   const before = f.w.calls.length, result = await inspect();
   assert.equal(result.details.piSessionId, "factory-session");
   assert.equal(result.details.blockId, f.w.source.blockId);
@@ -553,13 +559,13 @@ test("inspection replaces identity/status commands and follows current state wit
   assert.equal(result.details.messaging.returnRequests, 0);
   assert.equal(result.details.token, undefined, "do not expose the local lease token");
   assert.equal(f.w.calls.length, before, "inspection is not a native process probe");
-  assert.equal(f.tools.get("rex_inspect").annotations.readOnlyHint, true);
+  assert.equal(f.tools.get("rexpi_inspect").annotations.readOnlyHint, true);
   const oldToken = new BindingStore(join(f.root, "bindings")).all()[0].token;
   await f.events.get("session_tree")({}, f.ctx);
   assert.notEqual(new BindingStore(join(f.root, "bindings")).all()[0].token, oldToken);
   assert.equal((await inspect()).details.conversationId, result.details.conversationId);
   const stale = { ...f.ctx, sessionManager: { getSessionId: () => "changed" } };
-  for (const name of ["rex_inspect", "rex_return_to_parent"]) {
+  for (const name of ["rexpi_inspect", "rexpi_return_to_parent"]) {
     await assert.rejects(f.tools.get(name).execute("stale", {}, undefined, undefined, stale), /conversation changed/);
   }
   f.events.get("session_shutdown")({}, f.ctx);
@@ -570,7 +576,7 @@ test("direct messaging stop requires no model and remains usable while busy, ide
   f.ctx.isIdle = () => false;
   f.ctx.hasPendingMessages = () => false;
   await f.events.get("session_start")({}, f.ctx);
-  const control = action => f.tools.get("rex_message_control").execute("control", { action }, undefined, undefined, f.ctx);
+  const control = action => f.tools.get("rexpi_message_control").execute("control", { action }, undefined, undefined, f.ctx);
   const stop = f.shortcuts.find(s => s.key === "ctrl+alt+m").action;
   assert.equal((await control("observe")).details.enabled, true);
   const before = f.w.calls.length;
@@ -604,11 +610,11 @@ test("messaging stop key validation and opt-out; stop wins collisions with navig
       const f = fixture(t, { PI_REX_MESSAGES_STOP_KEY: key });
       await f.events.get("session_start")({}, f.ctx);
       assert.deepEqual(f.shortcuts.map(s => s.key), expected);
-      if (key !== "off" && key !== "invalid") assert.match(f.shortcuts[0].action.description, /Stop Rex result return/);
+      if (key !== "off" && key !== "invalid") assert.match(f.shortcuts[0].action.description, /Stop Rexpi result return/);
     });
   }
 });
-test("tool prose stays minimal without duplicate snippets or guidelines", async t => {
+test("tool prose stays bounded without duplicate snippets or guidelines", async t => {
   const f = fixture(t);
   await f.events.get("session_start")({}, f.ctx);
   let total = 0;
@@ -640,7 +646,7 @@ test("every tool schema stays provider-portable: no draft tuple items or additio
     for (const [key, child] of Object.entries(value)) walk(child, path + "." + key);
   };
   for (const [name, tool] of f.tools) walk(tool.parameters, name);
-  const bounds = f.tools.get("rex_open_terminal").parameters.properties.bounds;
+  const bounds = f.tools.get("rexpi_open_terminal").parameters.properties.bounds;
   assert.equal(bounds.items.type, "number");
   assert.equal(bounds.minItems, 4);
   assert.equal(bounds.maxItems, 4);

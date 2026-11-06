@@ -128,7 +128,7 @@ test("identical child IDs in different fan-outs use independent delegation outco
       startup: { state: "bound" }, handle };
   } };
   const delegation = new DelegationRuntime(launcher), runtime = new FanoutRuntime(delegation);
-  const inputs = [{ id: "shared-child", task: "same task", options: { grant: grant({ tools: ["read", "rex_agent_complete"] }) } }];
+  const inputs = [{ id: "shared-child", task: "same task", options: { grant: grant({ tools: ["read", "rexpi_agent_complete"] }) } }];
   const first = runtime.start("batch-a", inputs, { concurrency: 1, cwd: "/repo" });
   await first.settled;
   const second = runtime.start("batch-b", inputs, { concurrency: 1, cwd: "/repo" });

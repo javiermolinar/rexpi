@@ -27,8 +27,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     return requireFeature(source.runtime, source.agent, sessionId);
   };
   pi.registerTool({
-    name: "rex_agent_complete", label: "Record local agent completion",
-    description: "Done.",
+    name: "rexpi_agent_complete", label: "Record local agent completion",
+    description: "Record this subagent's explicit completed, failed, or cancelled outcome.",
     executionMode: "sequential",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
@@ -63,8 +63,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     },
   });
   pi.registerTool({
-    name: "rex_agent_result", label: "Retrieve agent result",
-    description: "Read.",
+    name: "rexpi_agent_result", label: "Retrieve agent result",
+    description: "Read the explicit result for one exact agent handle.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ handle }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
@@ -75,8 +75,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     },
   });
   pi.registerTool({
-    name: "rex_agent_cancel", label: "Cancel a selected agent run",
-    description: "Abort.",
+    name: "rexpi_agent_cancel", label: "Cancel a selected agent run",
+    description: "Request cancellation of one exact agent run; this does not stop its endpoint.",
     executionMode: "sequential",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ handle }, { additionalProperties: false }),
@@ -88,8 +88,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     },
   });
   pi.registerTool({
-    name: "rex_agent_stop", label: "Stop a cooperating agent endpoint",
-    description: "Stop.",
+    name: "rexpi_agent_stop", label: "Stop a cooperating agent endpoint",
+    description: "Request graceful shutdown of one exact agent endpoint; requires authorize:true.",
     executionMode: "sequential",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ handle, authorize: Type.Literal(true) }, { additionalProperties: false }),
@@ -101,8 +101,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     },
   });
   pi.registerTool({
-    name: "rex_agent_status", label: "Read agent status",
-    description: "State.",
+    name: "rexpi_agent_status", label: "Read agent status",
+    description: "Read binding, activity, delivery, and result state for one agent handle.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ handle }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
@@ -111,8 +111,8 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     },
   });
   pi.registerTool({
-    name: "rex_agent_events", label: "Read agent events",
-    description: "Log.",
+    name: "rexpi_agent_events", label: "Read agent events",
+    description: "Page retained lifecycle events for one agent handle without triggering work.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
       handle,

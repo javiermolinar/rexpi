@@ -35,22 +35,22 @@ function fixture() {
     set current(value) { current = value; }, get current() { return current; } };
 }
 
-test("rex_fanout and rex_join refresh partial outcomes without relaunching", async () => {
+test("rexpi_fanout and rexpi_join refresh partial outcomes without relaunching", async () => {
   const f = fixture();
   const params = { children: [input("one"), input("two")], concurrency: 1 };
-  const first = await f.tools.get("rex_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
+  const first = await f.tools.get("rexpi_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
   assert.equal(first.details.fanoutId, "fanout-tool"); assert.equal(first.details.state, "unknown");
   assert.deepEqual(first.details.children.map(child => child.state), ["unknown", "unknown"]);
   assert.equal(f.launches.length, 2);
   f.states.set("one", "ready"); f.states.set("two", "failed");
-  const joined = await f.tools.get("rex_join").execute("join-tool", { fanoutId: "fanout-tool" }, undefined, undefined, ctx);
+  const joined = await f.tools.get("rexpi_join").execute("join-tool", { fanoutId: "fanout-tool" }, undefined, undefined, ctx);
   assert.equal(joined.details.state, "partial"); assert.equal(joined.details.completed, true);
   assert.deepEqual(joined.details.children.map(child => child.state), ["succeeded", "failed"]);
   f.current = { registry: f.registry, join: f.join };
-  const repeated = await f.tools.get("rex_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
+  const repeated = await f.tools.get("rexpi_fanout").execute("fanout-tool", params, undefined, undefined, ctx);
   assert.deepEqual(repeated.details, joined.details, "exact existing fan-out needs no replacement runtime or capability");
   assert.equal(f.launches.length, 2);
-  await assert.rejects(f.tools.get("rex_fanout").execute("fanout-tool",
+  await assert.rejects(f.tools.get("rexpi_fanout").execute("fanout-tool",
     { children: [input("one", "changed scope"), input("two")], concurrency: 1 }, undefined, undefined, ctx),
     /Conflicting fan-out logical ID/);
   assert.equal(f.launches.length, 2);
@@ -58,12 +58,12 @@ test("rex_fanout and rex_join refresh partial outcomes without relaunching", asy
 
 test("fan-out cancellation returns interrupted child evidence without launching replacements", async () => {
   const f = fixture(), controller = new AbortController(); controller.abort();
-  const result = await f.tools.get("rex_fanout").execute("cancelled-fanout",
+  const result = await f.tools.get("rexpi_fanout").execute("cancelled-fanout",
     { children: [input("one"), input("two")], concurrency: 2 }, controller.signal, undefined, ctx);
   assert.equal(result.details.coordinator, "interrupted");
   assert.deepEqual(result.details.children.map(child => child.state), ["cancelled", "cancelled"]);
   assert.equal(f.launches.length, 0);
-  await assert.rejects(f.tools.get("rex_join").execute("missing", { fanoutId: "missing" }, undefined, undefined, ctx),
+  await assert.rejects(f.tools.get("rexpi_join").execute("missing", { fanoutId: "missing" }, undefined, undefined, ctx),
     /Unknown fan-out logical ID/);
 });
 
@@ -74,12 +74,12 @@ test("capability-attenuated exact retries use raw caller identity without derivi
     toolSignal: signal => signal ?? new AbortController().signal,
   } };
   const params = { children: [input("one")], concurrency: 1 };
-  const first = await f.tools.get("rex_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
-  const repeated = await f.tools.get("rex_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
+  const first = await f.tools.get("rexpi_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
+  const repeated = await f.tools.get("rexpi_fanout").execute("attenuated-repeat", params, undefined, undefined, ctx);
   assert.deepEqual(repeated.details, first.details);
   assert.equal(derived, 1);
   assert.equal(f.launches.length, 1);
-  await assert.rejects(f.tools.get("rex_fanout").execute("attenuated-repeat",
+  await assert.rejects(f.tools.get("rexpi_fanout").execute("attenuated-repeat",
     { children: [input("one", "changed")], concurrency: 1 }, undefined, undefined, ctx), /Conflicting fan-out logical ID/);
   assert.equal(f.launches.length, 1);
 });
@@ -90,7 +90,7 @@ test("all child grants are attenuated before any fan-out launch", async () => {
     deriveChildGrant(value) { derived.push(value); if (derived.length === 2) throw new Error("second grant denied"); return value; },
     toolSignal: signal => signal ?? new AbortController().signal,
   } };
-  await assert.rejects(f.tools.get("rex_fanout").execute("rejected-fanout",
+  await assert.rejects(f.tools.get("rexpi_fanout").execute("rejected-fanout",
     { children: [input("one"), input("two")] }, undefined, undefined, ctx), /second grant denied/);
   assert.equal(derived.length, 2); assert.equal(f.launches.length, 0);
   assert.equal(JSON.stringify(derived).includes("token"), false);

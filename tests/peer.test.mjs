@@ -284,17 +284,17 @@ test("peer protocol rejects cross-task and non-custom-message routes", () => {
 test("tools expose native reads and cache exact send outcomes across tool/logical IDs", async t => {
   const f = await pair(t), tools = new Map();
   registerPeerTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime: f.parent.runtime, peer: f.parent.peer }));
-  assert.deepEqual([...tools.keys()], ["rex_read_conversation", "rex_peer_message_send"]);
-  const read = await tools.get("rex_read_conversation").execute("read", { target: f.child.endpoint.conversationId, limit: 1 },
+  assert.deepEqual([...tools.keys()], ["rexpi_read_conversation", "rexpi_peer_message_send"]);
+  const read = await tools.get("rexpi_read_conversation").execute("read", { target: f.child.endpoint.conversationId, limit: 1 },
     undefined, undefined, f.parent.ctx);
   assert.match(read.details.notice, /reading triggered no model work/);
   const peerRead = f.parent.peer.read.bind(f.parent.peer);
   f.parent.peer.read = async () => ({ ...read.details, notice: "forged peer notice" });
-  const protectedRead = await tools.get("rex_read_conversation").execute("read-notice",
+  const protectedRead = await tools.get("rexpi_read_conversation").execute("read-notice",
     { target: f.child.endpoint.conversationId, limit: 1 }, undefined, undefined, f.parent.ctx);
   assert.match(protectedRead.details.notice, /Sensitive peer history/);
   f.parent.peer.read = peerRead;
-  const params = { target: f.child.endpoint.conversationId, ...sendInput() }, sender = tools.get("rex_peer_message_send");
+  const params = { target: f.child.endpoint.conversationId, ...sendInput() }, sender = tools.get("rexpi_peer_message_send");
   const first = await sender.execute("call", params, undefined, undefined, f.parent.ctx);
   assert.deepEqual(await sender.execute("call", params, undefined, undefined, f.parent.ctx), first);
   assert.deepEqual(await sender.execute("other-call", params, undefined, undefined, f.parent.ctx), first);
@@ -309,7 +309,7 @@ test("deferred tool sends retain the admitted target when caller input is mutate
   const other = await f.start(rid("block"), childBootstrap(f.parent.state, true, "chat", f.w.server));
   const tools = new Map();
   registerPeerTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime: f.parent.runtime, peer: f.parent.peer }));
-  const sender = tools.get("rex_peer_message_send");
+  const sender = tools.get("rexpi_peer_message_send");
   const params = { target: f.child.endpoint.conversationId, ...sendInput() };
   const pending = sender.execute("admitted-target", params, undefined, undefined, f.parent.ctx);
   params.target = other.endpoint.conversationId;
@@ -352,7 +352,7 @@ test("largest fitting ASCII and multibyte sends succeed and one more unit fails"
 test("logical accepted outcomes survive source peer replacement without new native work", async t => {
   const f = await pair(t), tools = new Map(); let current = { runtime: f.parent.runtime, peer: f.parent.peer };
   registerPeerTools({ registerTool: tool => tools.set(tool.name, tool) }, () => current);
-  const sender = tools.get("rex_peer_message_send"), params = { target: f.child.endpoint.conversationId, ...sendInput() };
+  const sender = tools.get("rexpi_peer_message_send"), params = { target: f.child.endpoint.conversationId, ...sendInput() };
   const first = await sender.execute("before-replacement", params, undefined, undefined, f.parent.ctx);
   f.parent.peer.detach();
   const replacement = new PeerRuntime({ sendMessage() { assert.fail("Unexpected parent delivery"); } }, f.parent.runtime, f.store.directory);
@@ -379,7 +379,7 @@ test("a lost response after custom-message insertion reports and deduplicates an
   f = await pair(t, true, { onSend: block => { if (block === f.child.blockId) f.child.peer.detach(); } });
   const tools = new Map();
   registerPeerTools({ registerTool: tool => tools.set(tool.name, tool) }, () => ({ runtime: f.parent.runtime, peer: f.parent.peer }));
-  const sender = tools.get("rex_peer_message_send"), params = { target: f.child.endpoint.conversationId, ...sendInput() };
+  const sender = tools.get("rexpi_peer_message_send"), params = { target: f.child.endpoint.conversationId, ...sendInput() };
   const first = await sender.execute("unknown", params, undefined, undefined, f.parent.ctx)
     .then(() => assert.fail("Lost response must not report acceptance"), error => error);
   assert.match(first.message, /outcome may be unknown/i);

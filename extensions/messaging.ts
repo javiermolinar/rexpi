@@ -76,10 +76,10 @@ export function registerMessagingControls(pi: ExtensionAPI, current: () => Conve
     return requireFeature(runtime, messaging, sessionId);
   };
   pi.registerTool({
-    name: "rex_message_control", label: "Control Rex result return",
-    description: "Read status, stop returns, or observe only. Observe revokes tickets, never restores return permission. Off leaves children, stored evidence and accepted SDK work intact.",
+    name: "rexpi_message_control", label: "Control Rexpi result return",
+    description: "Inspect or disable result returns; observation-only mode revokes existing return tickets.",
     executionMode: "sequential",
-    parameters: Type.Object({ action: literalUnion(["status", "observe", "off"] as const, "Ctrl+Alt+M stops directly without a model call.") }, { additionalProperties: false }),
+    parameters: Type.Object({ action: literalUnion(["status", "observe", "off"] as const) }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();
       if (!["status", "observe", "off"].includes(params.action)) throw new Error("Invalid messaging control action");
@@ -95,8 +95,8 @@ export function registerMessagingControls(pi: ExtensionAPI, current: () => Conve
     },
   });
   pi.registerTool({
-    name: "rex_message_inbox", label: "Inspect Rex message inbox",
-    description: "Read a retained inbox page: up to 16 messages/128 KiB, 512-character sanitized previews. No delivery, mark-read or replay; originals unchanged.",
+    name: "rexpi_message_inbox", label: "Inspect Rexpi message inbox",
+    description: "Read sanitized retained-message previews without delivery, replay, or marking messages read.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ after: cursor }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
@@ -115,8 +115,8 @@ export function registerMessageSend(pi: ExtensionAPI, get: () => MessagingRuntim
   const calls = new Map<string, { digest: string; result: Promise<SendResult> }>();
   const logicals = new Map<string, { digest: string; result: Promise<SendResult> }>();
   pi.registerTool({
-    name: "rex_message_send", label: "Send Rex task findings",
-    description: "Send authorized scoped findings to the exact related local endpoint. Envelope <=32 KiB. Copy task-supplied to/requestId; a final answer is not a send.",
+    name: "rexpi_message_send", label: "Send Rexpi task findings",
+    description: "Send a scoped progress, question, or result message to the exact related endpoint.",
     executionMode: "sequential",
     parameters: Type.Object({
       to: route,
@@ -127,7 +127,7 @@ export function registerMessageSend(pi: ExtensionAPI, get: () => MessagingRuntim
       kind: literalUnion(MESSAGE_KINDS),
       text: Type.String({ minLength: 1, maxLength: 32768 }),
       id: Type.Optional(Type.String({ maxLength: 36, pattern: UUID_PATTERN,
-        description: "Stable message UUID; omit to allocate once per tool call." })),
+        description: "Stable UUID; omit to allocate once." })),
     }, { additionalProperties: false }),
     async execute(toolCallId, params, signal, _update, ctx) {
       let to = params.to, routeFailure: { error: unknown } | undefined;

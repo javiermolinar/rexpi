@@ -210,7 +210,7 @@ async function peerPair(t) {
   return { w, parent, child };
 }
 
-test("rex_agent_result uses the authenticated provider, recovers explicitly, and rejects child self-reads", async t => {
+test("rexpi_agent_result uses the authenticated provider, recovers explicitly, and rejects child self-reads", async t => {
   const f = await peerPair(t), handle = makeHandle({ taskId: f.child.state.taskId,
     conversationId: f.child.state.conversationId });
   f.parent.agent.register(handle); f.child.agent.register(handle);
@@ -219,9 +219,9 @@ test("rex_agent_result uses the authenticated provider, recovers explicitly, and
     () => ({ runtime: f.parent.runtime, peer: f.parent.peer, agent: f.parent.agent }));
   registerAgentTools({ registerTool: tool => childTools.set(tool.name, tool) },
     () => ({ runtime: f.child.runtime, peer: f.child.peer, agent: f.child.agent }));
-  assert.deepEqual([...parentTools.keys()], ["rex_agent_complete", "rex_agent_result", "rex_agent_cancel", "rex_agent_stop",
-    "rex_agent_status", "rex_agent_events"]);
-  const read = tools => tools.get("rex_agent_result").execute("result", { handle }, undefined, undefined,
+  assert.deepEqual([...parentTools.keys()], ["rexpi_agent_complete", "rexpi_agent_result", "rexpi_agent_cancel", "rexpi_agent_stop",
+    "rexpi_agent_status", "rexpi_agent_events"]);
+  const read = tools => tools.get("rexpi_agent_result").execute("result", { handle }, undefined, undefined,
     tools === parentTools ? f.parent.ctx : f.child.ctx);
 
   assert.equal((await read(parentTools)).details.state, "pending");

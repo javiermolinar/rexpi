@@ -40,9 +40,9 @@ async function fixture(t) {
     inReplyTo: uuid(), kind: "result", text: "same finding", id: uuid() };
   const inbox = join(root, "pi-rex", "messages", peer.serverInstance, peer.conversationId, "inbox");
   return { root, w, events, tools, commands, notices, sm, ctx, store, owner, peer, params, inbox,
-    call: (id, input = params) => tools.get("rex_message_send").execute(id, input, undefined, undefined, ctx),
+    call: (id, input = params) => tools.get("rexpi_message_send").execute(id, input, undefined, undefined, ctx),
     async tree() { events.get("session_before_tree")({}, ctx); await events.get("session_tree")({}, ctx); },
-    async status() { return (await tools.get("rex_inspect").execute("status", {}, undefined, undefined, ctx)).details.messaging; },
+    async status() { return (await tools.get("rexpi_inspect").execute("status", {}, undefined, undefined, ctx)).details.messaging; },
   };
 }
 function publications(t, failFirst = false) {

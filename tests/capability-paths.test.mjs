@@ -322,7 +322,7 @@ test("direct and nested execution share the gate, and stale revocation wins with
 test("peer reads keep exact tool and related-target fences, never a filesystem path mapping", async t => {
   const related = "11111111-1111-4111-8111-111111111111";
   const other = "22222222-2222-4222-8222-222222222222";
-  const grant = change => ({ tools: ["rex_read_conversation"], readPaths: ["/not/a/filesystem/route"], writePaths: [],
+  const grant = change => ({ tools: ["rexpi_read_conversation"], readPaths: ["/not/a/filesystem/route"], writePaths: [],
     delegation: { maxDepth: 0 }, returnResults: false, turns: 2, timeoutMs: 10_000, ...change });
   const capability = new CapabilityRuntime(grant()); t.after(() => capability.revoke());
   const registered = new Map(), calls = [];
@@ -337,11 +337,11 @@ test("peer reads keep exact tool and related-target fences, never a filesystem p
     return { target: { conversationId: related }, view: input.view ?? "branch", entries: [{ text: "peer" }] };
   } };
   registerPeerTools(filtered, () => ({ runtime, peer }));
-  const tool = registered.get("rex_read_conversation");
+  const tool = registered.get("rexpi_read_conversation");
   assert.ok(tool);
   assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["cursor", "direction", "limit", "since", "target", "textOnly", "types", "view"]);
   assert.equal(tool.parameters.properties.path, undefined);
-  assert.equal(capability.guardTool("rex_read_conversation", { target: related }), undefined);
+  assert.equal(capability.guardTool("rexpi_read_conversation", { target: related }), undefined);
   const result = await tool.execute("peer", { target: related }, undefined, undefined,
     { sessionManager: { getSessionId: () => "session" } });
   assert.equal(result.details.entries[0].text, "peer");
@@ -352,10 +352,10 @@ test("peer reads keep exact tool and related-target fences, never a filesystem p
   assert.equal(calls.length, 1, "peer reads expose no caller-selected filesystem read");
 
   const deniedCapability = new CapabilityRuntime(grant({ tools: [] })); t.after(() => deniedCapability.revoke());
-  assert.equal(deniedCapability.guardTool("rex_read_conversation", { target: related }).block, true);
+  assert.equal(deniedCapability.guardTool("rexpi_read_conversation", { target: related }).block, true);
   const deniedTools = new Map(), deniedPi = { registerTool: definition => deniedTools.set(definition.name, definition) };
   const deniedFiltered = Object.create(deniedPi);
   deniedFiltered.registerTool = definition => { if (deniedCapability.allowsTool(definition.name)) deniedPi.registerTool(definition); };
   registerPeerTools(deniedFiltered, () => ({ runtime, peer }));
-  assert.equal(deniedTools.has("rex_read_conversation"), false);
+  assert.equal(deniedTools.has("rexpi_read_conversation"), false);
 });

@@ -92,8 +92,8 @@ export class DelegationRuntime {
     if (typeof task !== "string" || !task.trim() || task.length > 16_384 || task.includes("\0"))
       throw new Error("Invalid delegated task");
     const grant = parseCapabilityGrant(options.grant);
-    if (!grant.tools.includes("rex_agent_complete"))
-      throw new Error("Delegation grant requires rex_agent_complete for explicit completion evidence");
+    if (!grant.tools.includes("rexpi_agent_complete"))
+      throw new Error("Delegation grant requires rexpi_agent_complete for explicit completion evidence");
     const launch = await this.launcher.launch(id, {
       prompt: task, related: true, role: "chat", returnResults: grant.returnResults, grant,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),

@@ -35,9 +35,9 @@ async function extensionFixture(t) {
   rexpi(pi); await events.get("session_start")({}, ctx);
   const params = { prompt: "scoped fixture task", returnResults: true, focus: false };
   return { root, w, events, tools, commands, notices, sm, ctx, params,
-    call(id, input = params) { return tools.get("rex_start_pi").execute(id, input, undefined, undefined, ctx); },
+    call(id, input = params) { return tools.get("rexpi_start_pi").execute(id, input, undefined, undefined, ctx); },
     async tree() { events.get("session_before_tree")({}, ctx); await events.get("session_tree")({}, ctx); },
-    async status() { return (await tools.get("rex_inspect").execute("status", {}, undefined, undefined, ctx)).details.messaging; },
+    async status() { return (await tools.get("rexpi_inspect").execute("status", {}, undefined, undefined, ctx)).details.messaging; },
   };
 }
 
