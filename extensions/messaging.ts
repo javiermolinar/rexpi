@@ -62,6 +62,15 @@ async function inspectInbox(active: MessagingRuntime, after?: string, signal?: A
   });
   return { notice: inspectionNotice, messages, next: page.next, truncated: page.next !== undefined };
 }
+type InboxInspection = Awaited<ReturnType<typeof inspectInbox>>;
+function inboxText(details: InboxInspection, verbose: boolean): string {
+  if (verbose) return JSON.stringify(details, null, 2);
+  return JSON.stringify({ messages: details.messages.map(message => ({ id: message.id, requestId: message.requestId,
+    runId: message.runId, runtimeId: message.runtimeId, inReplyTo: message.inReplyTo, at: message.at, kind: message.kind,
+    preview: message.preview, previewTruncated: message.previewTruncated,
+    delivery: message.delivery?.state ?? "unknown", processingConfirmed: message.processingConfirmed })),
+    ...(details.next ? { next: details.next } : {}), truncated: details.truncated }, null, 2);
+}
 
 /** Shared with the direct keyboard stop: synchronous revocation, no model or peer work. */
 export function stopMessaging(value: MessagingRuntime): string {
@@ -98,11 +107,12 @@ export function registerMessagingControls(pi: ExtensionAPI, current: () => Conve
     name: "rexpi_message_inbox", label: "Inspect Rexpi message inbox",
     description: "Read sanitized retained-message previews without delivery, replay, or marking messages read.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    parameters: Type.Object({ after: cursor }, { additionalProperties: false }),
+    parameters: Type.Object({ after: cursor, verbose: Type.Optional(Type.Boolean({
+      description: "Include full endpoints, digests, observations, and notices; default false." })) }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       try {
         const details = await inspectInbox(active(ctx.sessionManager.getSessionId()), params.after, signal);
-        return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
+        return { content: [{ type: "text", text: inboxText(details, params.verbose === true) }], details };
       } catch (error) {
         throw new Error(preview(error instanceof Error ? error.message : String(error)));
       }

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Compact model-visible agent status/result/event and inbox responses by default, with `verbose:true` for full correlation and notices, and add log-backed test commands plus a deterministic coordinator smoke procedure.
 - Terminate Pi's current tool batch after `rexpi_agent_complete`, then disarm the capability deadline at the exact local child's `agent_end`. Mixed batches retain normal turn/deadline enforcement, and later turns abort quietly without post-completion turn-limit or expiry warnings.
 - Add optional bounded `waitMs` retrieval to `rexpi_agent_result`, with abortable exact-handle reads for pending evidence, immediate terminal/unknown results, and no completion inference from settlement or deadlines.
 - Expose exact delegation and fan-out handles in model-visible output, add bounded join outcome projections with clipped summaries, and add opt-in cached agent handles and lifecycle states to `rexpi_inspect` without native or peer reads.

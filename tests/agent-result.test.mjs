@@ -293,7 +293,11 @@ test("rexpi_agent_result uses the authenticated provider, recovers explicitly, a
   await f.child.peer.attach(f.child.ctx); f.child.agent.attach(f.child.peer, f.child.peer);
   const ready = await read(parentTools);
   assert.equal(ready.details.state, "ready"); assert.deepEqual(ready.details.completion, completion);
-  assert.equal(JSON.parse(ready.content[0].text).state, "ready");
+  const compact = JSON.parse(ready.content[0].text);
+  assert.equal(compact.state, "ready"); assert.equal(compact.runtimeId, undefined); assert.equal(compact.notice, undefined);
+  assert.equal(compact.completion.summary, "retained summary"); assert.equal(compact.completion.requestId, undefined);
+  const verbose = await parentTools.get("rexpi_agent_result").execute("verbose", { handle, verbose: true }, undefined, undefined, f.parent.ctx);
+  assert.deepEqual(JSON.parse(verbose.content[0].text), verbose.details);
   assert.deepEqual((await read(parentTools, 1000)).details, ready.details, "terminal waits reuse retained evidence");
   await assert.rejects(read(childTools), /remote handle/);
   await assert.rejects(f.child.peer.agentResult(handle), /Invalid or ambiguous peer target/);

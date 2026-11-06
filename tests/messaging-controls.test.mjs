@@ -38,7 +38,7 @@ async function setup(t, options = {}) {
       const result = await tools.get("rexpi_message_control").execute("control", { action }, signal, undefined, ctx);
       return { text: result.content[0].text, details: result.details };
     },
-    inbox(after, signal) { return tools.get("rexpi_message_inbox").execute("inspect", { after }, signal, undefined, a.ctx); },
+    inbox(after, signal, verbose = false) { return tools.get("rexpi_message_inbox").execute("inspect", { after, verbose }, signal, undefined, a.ctx); },
     async register() { const ticket = await m.prepareReturn(); tickets.set(ticket.requestId, ticket);
       await m.registerReturn(ticket, child); await m.poll(); await flush(); return ticket; },
     message(requestId, text = "unprocessed finding") { const ticket = tickets.get(requestId);
@@ -81,6 +81,12 @@ test("status and inbox remain read-only with active tickets; previews sanitize a
   assert.doesNotMatch(row.preview, /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
   assert.equal(row.text, undefined); assert.equal(row.processingConfirmed, false);
   assert.match(result.details.notice, /untrusted peer data/); assert.match(result.details.notice, /original files remain unchanged/i);
+  const compact = JSON.parse(result.content[0].text), visible = compact.messages[0];
+  assert.equal(visible.id, e.id); assert.equal(visible.preview, row.preview);
+  assert.equal(visible.from, undefined); assert.equal(visible.to, undefined); assert.equal(visible.digest, undefined);
+  assert.equal(visible.delivery, row.delivery.state); assert.equal(compact.notice, undefined);
+  const verbose = await f.inbox(undefined, undefined, true);
+  assert.equal(verbose.content[0].text, JSON.stringify(verbose.details, null, 2));
   await f.inbox();
   assert.equal(f.sent.length, 0); assert.deepEqual(f.m.snapshot(), snapshot); assert.deepEqual(evidence(f), before);
   assert.equal(f.timers.size, 1, "inspection does not start or reschedule workers");

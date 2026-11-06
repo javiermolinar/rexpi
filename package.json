@@ -19,7 +19,9 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "node scripts/test-selection.mjs all",
+    "test:orchestration": "node scripts/test-selection.mjs orchestration",
+    "test:agents-ui": "node scripts/test-selection.mjs agents-ui",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "pack:check": "node scripts/check-package.mjs",

@@ -151,9 +151,19 @@ test("native tools expose only read-only status/events and event reads cause no 
   assert.equal(tools.get("rexpi_agent_stop").annotations.destructiveHint, true);
   const status = await tools.get("rexpi_agent_status").execute("status", { handle: agent }, undefined, undefined, ctx);
   assert.equal(status.details.resultAvailable, false); assert.equal(status.details.lifecycle.result, "pending");
+  const compactStatus = JSON.parse(status.content[0].text);
+  assert.equal(compactStatus.runtimeId, undefined); assert.equal(compactStatus.notice, undefined);
+  assert.deepEqual(compactStatus.lifecycle, status.details.lifecycle);
+  const verboseStatus = await tools.get("rexpi_agent_status").execute("status-verbose", { handle: agent, verbose: true }, undefined, undefined, ctx);
+  assert.deepEqual(JSON.parse(verboseStatus.content[0].text), verboseStatus.details);
   const calls = reader.calls;
   const events = await tools.get("rexpi_agent_events").execute("events", { handle: agent, limit: 2 }, undefined, undefined, ctx);
   assert.equal(events.details.events.length, 2); assert.equal(reader.calls, calls);
+  const compactEvents = JSON.parse(events.content[0].text);
+  assert.equal(compactEvents.runtimeId, undefined); assert.equal(compactEvents.notice, undefined);
+  assert.deepEqual(compactEvents.events, events.details.events);
+  const verboseEvents = await tools.get("rexpi_agent_events").execute("events-verbose", { handle: agent, verbose: true }, undefined, undefined, ctx);
+  assert.deepEqual(JSON.parse(verboseEvents.content[0].text), verboseEvents.details);
   assert.equal(reader.sends + reader.modelCalls + reader.turns, 0);
   assert.ok(Buffer.byteLength(events.content[0].text) <= MAX_AGENT_EVENT_PAGE_BYTES);
   await assert.rejects(tools.get("rexpi_agent_status").execute("wrong-source", { handle: agent }, undefined, undefined,

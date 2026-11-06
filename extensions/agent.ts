@@ -4,7 +4,7 @@ import { AGENT_HANDLE_VERSION, type AgentHandle } from "../lib/agent.ts";
 import { AgentRuntime, MAX_AGENT_COMPLETION_ARTIFACT_BYTES, MAX_AGENT_COMPLETION_ARTIFACTS,
   MAX_AGENT_COMPLETION_ERROR_CODE_BYTES, MAX_AGENT_COMPLETION_ERROR_DETAILS_BYTES,
   MAX_AGENT_COMPLETION_ERROR_MESSAGE_BYTES, MAX_AGENT_COMPLETION_SUMMARY_BYTES, MAX_AGENT_CURSOR_BYTES,
-  MAX_AGENT_EVENT_PAGE_SIZE, MAX_AGENT_RESULT_WAIT_MS } from "../lib/agent-runtime.ts";
+  MAX_AGENT_EVENT_PAGE_SIZE, MAX_AGENT_RESULT_WAIT_MS, type AgentEventPage, type AgentResult, type AgentStatus } from "../lib/agent-runtime.ts";
 import type { PeerRuntime } from "../lib/peer.ts";
 import { requireFeature, type Runtime } from "../lib/runtime.ts";
 
@@ -18,6 +18,26 @@ const handle = Type.Object({
 }, { additionalProperties: false });
 
 export interface AgentToolState { runtime?: Runtime; peer?: PeerRuntime; agent?: AgentRuntime; localAgentHandle?: AgentHandle }
+
+const verboseParameter = Type.Optional(Type.Boolean({ description: "Include full correlation and notices; default false." }));
+function resultText(details: AgentResult, verbose: boolean): string {
+  if (verbose) return JSON.stringify(details);
+  const completion = details.completion ? { outcome: details.completion.outcome, summary: details.completion.summary,
+    artifacts: details.completion.artifacts, ...(details.completion.error ? { error: details.completion.error } : {}) } : undefined;
+  return JSON.stringify({ handle: details.handle, state: details.state,
+    ...(details.outcome ? { outcome: details.outcome } : {}), ...(completion ? { completion } : {}),
+    evidence: details.evidence, ...(details.readError ? { readError: details.readError } : {}) });
+}
+function statusText(details: AgentStatus, verbose: boolean): string {
+  return JSON.stringify(verbose ? details : { handle: details.handle, lifecycle: details.lifecycle,
+    pendingInput: details.pendingInput, resultAvailable: details.resultAvailable, evidence: details.evidence,
+    ...(details.readError ? { readError: details.readError } : {}) });
+}
+function eventsText(details: AgentEventPage, verbose: boolean): string {
+  return JSON.stringify(verbose ? details : { handle: details.handle, events: details.events, bytes: details.bytes,
+    oldestEventId: details.oldestEventId, latestEventId: details.latestEventId, dropped: details.dropped,
+    resultAvailable: details.resultAvailable, ...(details.next ? { next: details.next } : {}) });
+}
 
 export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolState): void {
   const localAgentHandle = current().localAgentHandle;
@@ -67,14 +87,14 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     description: "Read one exact agent result, optionally waiting for pending evidence.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({ handle, waitMs: Type.Optional(Type.Integer({ minimum: 0,
-      maximum: MAX_AGENT_RESULT_WAIT_MS, description: "Bounded wait for pending evidence; default 0 (immediate)." })) },
-      { additionalProperties: false }),
+      maximum: MAX_AGENT_RESULT_WAIT_MS, description: "Bounded wait for pending evidence; default 0 (immediate)." })),
+      verbose: verboseParameter }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       const sessionId = ctx.sessionManager.getSessionId(), source = current();
       const agent = active(sessionId), own = source.runtime!.snapshot();
       const details = params.waitMs ? await agent.waitForResult(params.handle, own.state, params.waitMs, signal)
         : await agent.result(params.handle, own.state, signal);
-      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      return { content: [{ type: "text", text: resultText(details, params.verbose === true) }], details };
     },
   });
   pi.registerTool({
@@ -107,10 +127,10 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
     name: "rexpi_agent_status", label: "Read agent status",
     description: "Read binding, activity, delivery, and result state for one agent handle.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    parameters: Type.Object({ handle }, { additionalProperties: false }),
+    parameters: Type.Object({ handle, verbose: verboseParameter }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       const details = await active(ctx.sessionManager.getSessionId()).status(params.handle, signal);
-      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      return { content: [{ type: "text", text: statusText(details, params.verbose === true) }], details };
     },
   });
   pi.registerTool({
@@ -121,6 +141,7 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
       handle,
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_EVENT_PAGE_SIZE })),
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_AGENT_CURSOR_BYTES })),
+      verbose: verboseParameter,
     }, { additionalProperties: false }),
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();
@@ -128,7 +149,7 @@ export function registerAgentTools(pi: ExtensionAPI, current: () => AgentToolSta
       if (params.limit !== undefined) input.limit = params.limit;
       if (params.cursor !== undefined) input.cursor = params.cursor;
       const details = active(ctx.sessionManager.getSessionId()).events(params.handle, input);
-      return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      return { content: [{ type: "text", text: eventsText(details, params.verbose === true) }], details };
     },
   });
 }

@@ -228,6 +228,8 @@ The lifecycle tools are:
 | `rexpi_agent_cancel` | Request abort of one exact related run, separate from stopping its endpoint. |
 | `rexpi_agent_stop` | With `authorize:true`, request graceful shutdown of the exact cooperating related endpoint. |
 
+Status, result, and event tools return compact model-visible text by default, omitting repeated notices and duplicate correlation fields. Pass `verbose:true` for the original full output; `details` always retains complete evidence. `rexpi_message_inbox` follows the same pattern: its default projection contains message IDs, correlation, sanitized previews, delivery state, and pagination, while `verbose:true` includes endpoints, digests, observations, and notices.
+
 **The status axes are independent.** `binding` describes created/bound/unknown/exited/replaced endpoint evidence. `activity` distinguishes non-idle (`running`), an instantaneous idle sample, and correlated agent-end settlement; none proves model processing or completion. `pendingInput` is only the last pending-message sample. `delivery` concerns a requested settlement notification: accepted delivery proves neither parent processing nor completion and is never retracted. `result` changes only on explicit result evidence or an explicit cancellation/unknown observation. Conversation history, activity, delivery, cancellation, stop, and result evidence do not imply one another.
 
 Results are not inferred from idle, settlement, exit, replacement, launch, or delivery. `pending` means the current target explicitly reported no completion; `unknown` means evidence is unavailable or ambiguous. `ready`, `failed`, and `cancelled` include only an explicit retained completion. `resultAvailable` reflects that local explicit completion, not remote liveness. Once retained, a terminal result survives later stop, disconnect, exit, or replacement evidence.
@@ -255,6 +257,39 @@ Cancellation outcomes are also narrow. `requested` records no acknowledgement; `
 Stale, foreign, self, miscorrelated, and ambiguous-runtime requests have no shutdown effect. Concurrent and repeated calls share retained outcomes, and the child independently deduplicates the provider so shutdown is invoked at most once for that handle, including after an unknown outcome. Stop never kills or aborts a process, calls `Runtime.stop`, detaches or cleans up resources, restarts, retries, marks surviving work cancelled, or withdraws accepted messages/results. Normal later Pi `session_shutdown` may close peer resources; retained in-memory bindings and outcome evidence remain subject to their normal lifecycle.
 
 Evidence is deliberately bounded and in memory: at most 64 runs and 256 events per run are retained, event pages contain at most 100 events and 48 KiB, and oversized completion/status/result/stop records are rejected. Evicted cursors and replaced generations fail rather than silently retargeting. This is not persistent storage or a liveness guarantee across process restart. Settlement notifications retain their existing opt-in behavior; stop and result reads do not send notifications, change `returnResults`, or start model work.
+
+## Coordinator smoke checks
+
+Run these commands from the repository root (for example `/Users/javimolina/pi-rex`):
+
+```sh
+npm test
+npm run test:orchestration
+npm run test:agents-ui
+```
+
+Each command writes full test output to a timestamped log under the system temporary directory and prints only the test counts and log path on success. Failure output is printed in full.
+
+For a deterministic live delegation, use a fresh coordinator and delegate one child with `returnResults:true`, `turns:2`, and tools `rexpi_message_send` plus `rexpi_agent_complete`. Use this exact child task:
+
+```text
+Send the exact result text `route-ok` through the issued result route,
+then record completion with summary `delegate-ok`. Do not perform other work.
+```
+
+Verify the model-visible handle, an explicit `ready/completed` result from `rexpi_agent_result` with `waitMs:30000`, and the `route-ok` inbox preview. Queued or accepted delivery is not processing; use the retained completion for the outcome.
+
+The orchestration closure categories are:
+
+- **F1:** explicit child completion is consumed by join.
+- **F2:** settlement and delivery remain independent of completion.
+- **F3:** stop uses the real authorization contract without fabricated exit evidence.
+- **F4:** capability-attenuated exact retries preserve identity without relaunching.
+- **F5:** equal child IDs in distinct fan-out batches remain independent.
+- **F6:** delegation identity binds the literal parent cwd.
+- **F7:** agent hierarchy, filtering, status badges, and narrow-width rendering preserve evidence and selection.
+
+These names refer to closure categories, not separate test scripts. The live smoke procedure should also check current model-visible handle/outcome projections and the compact `verbose:false` responses.
 
 ## Configure
 
