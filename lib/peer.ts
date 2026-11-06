@@ -273,6 +273,24 @@ function projectedText(raw: unknown): string {
   if (entry.type === "compaction" || entry.type === "branch_summary") return typeof entry.summary === "string" ? entry.summary : "";
   return "";
 }
+function clipText(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(JSON.stringify(value)) <= maxBytes) return value;
+  const limit = Math.max(0, maxBytes - 3);
+  let text = "", bytes = 0;
+  for (const character of value) {
+    // Exclude only the surrounding quotes; escaped content can be larger than raw UTF-8.
+    const size = Buffer.byteLength(JSON.stringify(character)) - 2;
+    if (bytes + size > limit) break;
+    text += character; bytes += size;
+  }
+  return text + (maxBytes >= 3 ? "…" : "");
+}
+function projectedEntry(raw: unknown, id: string, type: string): unknown {
+  const value = { id, type, text: projectedText(raw) };
+  if (Buffer.byteLength(JSON.stringify(value)) <= MAX_HISTORY_ENTRY_BYTES) return value;
+  const overhead = Buffer.byteLength(JSON.stringify({ id, type, text: "", textTruncated: true }));
+  return { id, type, text: clipText(value.text, Math.max(0, MAX_HISTORY_ENTRY_BYTES - overhead)), textTruncated: true };
+}
 export function historyPage(entries: readonly unknown[], sessionId: string, leafId: string | null,
     input: Required<Pick<PeerReadInput, "view" | "limit">> & Pick<PeerReadInput,
       "cursor" | "direction" | "since" | "types" | "textOnly">): Omit<PeerReadResult, "target" | "activity"> {
@@ -300,10 +318,10 @@ export function historyPage(entries: readonly unknown[], sessionId: string, leaf
   const selected: { value: unknown; id: string; bytes: number }[] = [];
   let bytes = 0, traversed = 0;
   for (; traversed < ordered.length && selected.length < input.limit; traversed++) {
-    const entry = ordered[traversed], rawBody = JSON.stringify(entry.raw);
-    if (Buffer.byteLength(rawBody) > MAX_HISTORY_ENTRY_BYTES)
+    const entry = ordered[traversed];
+    if (!query.textOnly && Buffer.byteLength(JSON.stringify(entry.raw)) > MAX_HISTORY_ENTRY_BYTES)
       throw new Error("Conversation entry " + entry.id + " exceeds 48 KiB");
-    const value = query.textOnly ? { id: entry.id, type: entry.type, text: projectedText(entry.raw) } : entry.raw;
+    const value = query.textOnly ? projectedEntry(entry.raw, entry.id, entry.type) : entry.raw;
     const size = Buffer.byteLength(JSON.stringify(value));
     if (selected.length && bytes + size > MAX_HISTORY_PAGE_BYTES) break;
     if (bytes + size > MAX_HISTORY_PAGE_BYTES) throw new Error("Conversation page exceeds 48 KiB");
@@ -351,8 +369,9 @@ export function validatePeerReadResult(value: unknown, input: PeerReadInput, tar
       throw new Error("Conversation response entry violates the requested type filter");
     ids.add(entry.id);
     if (checked.textOnly) {
-      keys(entry, ["id", "type", "text"]);
-      if (typeof entry.text !== "string") throw new Error("Invalid conversation text entry");
+      keys(entry, ["id", "type", "text", ...(Object.hasOwn(entry, "textTruncated") ? ["textTruncated"] : [])]);
+      if (typeof entry.text !== "string" || (entry.textTruncated !== undefined && entry.textTruncated !== true))
+        throw new Error("Invalid conversation text entry");
     }
     const size = Buffer.byteLength(JSON.stringify(raw));
     if (size > MAX_HISTORY_ENTRY_BYTES) throw new Error("Conversation read entry exceeds 48 KiB");

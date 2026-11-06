@@ -72,6 +72,27 @@ test("real endpoint pages active in-memory history without model work", async t 
   assert.equal(f.child.sent.length, 0);
 });
 
+test("real endpoint text projection clips oversized entries and preserves continuation", async t => {
+  const f = await pair(t);
+  f.child.sm.appendMessage({ role: "user", content: "🙂".repeat(20_000), timestamp: Date.now() });
+  f.child.sm.appendMessage({ role: "user", content: "latest-small", timestamp: Date.now() });
+  const first = await f.parent.peer.read(f.child.endpoint.conversationId,
+    { direction: "tail", limit: 2, textOnly: true });
+  assert.equal(first.entries.length, 1);
+  assert.equal(first.entries[0].text, "latest-small"); assert.ok(first.next);
+  const rest = await f.parent.peer.read(f.child.endpoint.conversationId,
+    { direction: "tail", limit: 100, textOnly: true, cursor: first.next });
+  const large = rest.entries.find(entry => entry.textTruncated);
+  assert.ok(large); assert.ok(large.text.endsWith("…"));
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) <= 48 * 1024);
+  assert.ok(rest.next);
+  const older = await f.parent.peer.read(f.child.endpoint.conversationId,
+    { direction: "tail", limit: 100, textOnly: true, cursor: rest.next });
+  assert.ok(older.entries.every(entry => entry.textTruncated === undefined));
+  assert.ok(older.entries.some(entry => entry.text.includes("child history")));
+  await assert.rejects(f.parent.peer.read(f.child.endpoint.conversationId, { direction: "tail", limit: 2 }), /exceeds 48 KiB/);
+});
+
 test("context view applies compaction while branch view retains raw history", async t => {
   const f = await pair(t);
   f.child.sm.appendMessage({ role: "user", content: "summarized old request", timestamp: Date.now() });
@@ -153,6 +174,30 @@ test("type filters and text projection preserve entry identity and raw-view beha
   assert.deepEqual(filtered.entries.map(value => value.id), ["a", "c"]); assert.deepEqual(filtered.types, ["custom_message", "message"]);
   const raw = historyPage(entries, "session", "e", { view: "branch", limit: 100 });
   assert.deepEqual(raw.entries, entries); assert.equal(raw.textOnly, false);
+});
+
+test("oversized text projections are bounded, marked, and recoverable while raw reads stay strict", () => {
+  const entry = (id, text) => ({ id, type: "message", message: { role: "user", content: text } });
+  const entries = [entry("huge", "🙂".repeat(20_000)), entry("small", "small")];
+  const first = historyPage(entries, "session", "small", { view: "branch", limit: 1, textOnly: true });
+  assert.equal(first.entries[0].textTruncated, true);
+  assert.ok(first.entries[0].text.endsWith("…"));
+  assert.ok(Buffer.byteLength(JSON.stringify(first.entries[0])) <= 48 * 1024);
+  assert.ok(first.next);
+  const second = historyPage(entries, "session", "small",
+    { view: "branch", limit: 1, textOnly: true, cursor: first.next });
+  assert.deepEqual(second.entries, [{ id: "small", type: "message", text: "small" }]);
+  assert.equal(second.next, undefined);
+  assert.throws(() => historyPage(entries, "session", "small", { view: "branch", limit: 1 }), /exceeds 48 KiB/);
+});
+
+test("projection byte bounds include JSON escaping for quotes, slashes, and controls", () => {
+  const entry = (id, text) => ({ id, type: "message", message: { role: "user", content: text } });
+  const page = historyPage([entry("escapes", '"\\\n\0'.repeat(20_000))], "session", "escapes",
+    { view: "branch", limit: 1, textOnly: true });
+  assert.equal(page.entries[0].textTruncated, true);
+  assert.ok(page.entries[0].text.endsWith("…"));
+  assert.ok(Buffer.byteLength(JSON.stringify(page.entries[0])) <= 48 * 1024);
 });
 
 test("tail byte bounds continue backward without merging oversized pages", () => {
