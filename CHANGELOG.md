@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+- Add configurable multi-host terminal execution: read-only Rex host discovery, explicit per-conversation selection, bounded SSH Unix-socket forwarding, and remote sessions, tabs, splits, and floating panes with exact host/server/resource identities. Remote cwd, executable lookup, and PATH stay remote; disconnects and uncertain creation fail closed without local fallback or automatic retry.
+- Document the controller, remote-Pi, and cross-host agent contract in `docs/remote-controller-contract.md`. Existing launches, configured commands, agents, and messaging remain local.
 
 - Validate the complete delegation result-delivery grant before launch: `returnResults:true` now requires `rexpi_message_send` alongside `rexpi_agent_complete`, with no child created on rejection. Delegated prompts include a compact tool/read/write-path manifest and turn-delivery guidance so reviewers do not need to discover their own grant.
 
