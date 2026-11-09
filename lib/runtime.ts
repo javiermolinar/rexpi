@@ -41,6 +41,7 @@ export class Runtime {
   private timer?: ReturnType<typeof setInterval>;
   private context?: ExtensionContext;
   private children: Child[] = [];
+  private hostStatus = "local";
   constructor(rex: Rex, store: BindingStore, blockId: string, pid = process.pid) {
     this.rex = rex; this.store = store; this.blockId = blockId; this.pid = pid;
   }
@@ -53,7 +54,7 @@ export class Runtime {
       try { this.store.remove(this.state.conversationId, this.token); } catch { /* lease expires if cleanup is unavailable */ }
     }
     try { this.context?.ui.setStatus("rexpi", undefined); } catch { /* context may be shutting down */ }
-    this.state = undefined; this.server = undefined; this.context = undefined; this.children = [];
+    this.state = undefined; this.server = undefined; this.context = undefined; this.children = []; this.hostStatus = "local";
   }
   async start(ctx: ExtensionContext, persist: (state: Orientation) => void, seed?: Bootstrap): Promise<void> {
     this.stop();
@@ -114,8 +115,15 @@ export class Runtime {
   }
   private updateStatus(): void {
     if (!this.state) return;
-    this.context?.ui.setStatus("rexpi", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
-      + (this.state.origin ? " · parent linked" : ""));
+    try {
+      this.context?.ui.setStatus("rexpi", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
+        + (this.state.origin ? " · parent linked" : "") + " · host " + this.hostStatus);
+    } catch { /* Status presentation cannot change selection or binding authority. */ }
+  }
+  /** HostSelection supplies concise execution-host state; Runtime still owns the local origin status. */
+  setHostStatus(status: string): void {
+    this.hostStatus = status;
+    this.updateStatus();
   }
   snapshot(): Snapshot {
     if (!this.state || !this.server) throw new Error("No verified Rexpi conversation; use interactive Pi inside Rex");

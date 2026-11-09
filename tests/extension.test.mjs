@@ -66,6 +66,19 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.deepEqual(f.shortcuts.map(s => s.key), ["ctrl+alt+m", "ctrl+alt+b", "ctrl+alt+a"]);
   assert.equal(f.w.created.length, 0);
 });
+test("invalid optional host settings disable only host selection, not local Rexpi", async t => {
+  const f = fixture(t, {}, { "pi-rex": { hosts: { connections: { debian: { sshTarget: "debian" } } } } });
+  await f.events.get("session_start")({}, f.ctx);
+  assert.ok(f.tools.has("rexpi_open_terminal"));
+  assert.ok(f.tools.has("rexpi_message_send"));
+  assert.ok(f.notices.some(([message]) => /host selection unavailable.*local Rexpi remains active/.test(message)));
+  await assert.rejects(f.tools.get("rexpi_connect_host").execute("connect", { host: "local" },
+    undefined, undefined, f.ctx), /local Rexpi remains active/);
+  const inspected = await f.tools.get("rexpi_inspect").execute("inspect", {}, undefined, undefined, f.ctx);
+  assert.equal(inspected.details.executionHost, undefined);
+  assert.equal(inspected.details.localOrigin.serverHostId, f.w.server.hostId);
+});
+
 test("non-Rex environments leave all Pi extension registries and bootstrap data untouched", async t => {
   const cases = [
     ["both absent", { REX_SESSION: undefined, REX_BLOCK: undefined }],

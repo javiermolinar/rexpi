@@ -7,7 +7,8 @@ export type Exec = (command: string, args: string[], options?: {
 }) => Promise<ExecResult>;
 export interface CreateOptions {
   placement: "session" | "right" | "down" | "tab" | "floating";
-  source: Target;
+  /** New sessions need no existing anchor; every other placement requires its exact remote/local source. */
+  source?: Target;
   cwd: string;
   title: string;
   focus: boolean;
@@ -121,6 +122,34 @@ export class Rex {
     await Promise.all(Array.from({ length: Math.min(VIEW_CONCURRENCY, sessions.length) }, worker));
     return groups.flat();
   }
+  /** Verify only the remote server identity; this does not require a local caller or an existing Rex anchor. */
+  async remoteIdentity(expected: { hostId: string; instanceId: string }, signal?: AbortSignal): Promise<{ hostId: string; instanceId: string }> {
+    if (!uuid(expected.hostId) || !uuid(expected.instanceId)) throw new Error("Exact remote Rex server UUIDs are required");
+    const identity = await this.json(["whoami", "--json"], signal);
+    if (identity.host_id !== expected.hostId || identity.instance_id !== expected.instanceId)
+      throw new Error("Remote Rex server identity does not match the configured host");
+    return { hostId: expected.hostId, instanceId: expected.instanceId };
+  }
+  /** Remote-safe identity and anchor discovery: no local principal, source process, or project checks. */
+  async remoteAnchor(expected: { hostId: string; instanceId: string }, signal?: AbortSignal): Promise<{
+    target: Target; server: { hostId: string; instanceId: string };
+  }> {
+    const server = await this.remoteIdentity(expected, signal);
+    const matches: Target[] = [];
+    const seen = new Set<string>();
+    for (const { sessionId, windowId, block } of await this.inspect(signal)) {
+      if (block.host_id !== expected.hostId || block.creator_name !== "com.superlogical.terminal") continue;
+      if (!rexId(block.block_id, "block") || (block.owner != null && !rexId(block.owner, "client")))
+        throw new Error("Invalid remote Rex terminal identity");
+      if (seen.has(block.block_id)) throw new Error("Remote Rex terminal anchor is ambiguous");
+      seen.add(block.block_id);
+      matches.push({ sessionId, windowId, blockId: block.block_id,
+        ...(block.owner ? { owner: block.owner as string } : {}) });
+    }
+    if (matches.length !== 1)
+      throw new Error(matches.length ? "Remote Rex terminal anchor is ambiguous" : "No appropriate remote Rex terminal anchor exists");
+    return { target: matches[0], server };
+  }
   async locate(blockId: string, signal?: AbortSignal): Promise<Target> {
     if (!this.server || !rexId(blockId, "block")) throw new Error("Unverified Rex block");
     const matches: Target[] = [];
@@ -199,8 +228,10 @@ export class Rex {
   }
   async create(options: CreateOptions, signal?: AbortSignal): Promise<Created> {
     const { source, placement, title, command, cwd, focus } = options;
+    if (placement !== "session" && !source) throw new Error("An exact Rex source anchor is required");
     if (options.sessionName !== undefined && placement !== "session") throw new Error("sessionName applies only to a new Rex session");
     if (placement === "floating") {
+      if (!source) throw new Error("An exact Rex source anchor is required");
       const value = await this.api("session.new_layer", {
         session_id: source.sessionId, window_id: source.windowId,
         bounds: options.bounds ?? [0.1, 0.1, 0.8, 0.8], focus,
@@ -215,10 +246,16 @@ export class Rex {
     const common = ["--cwd", cwd, "--shell=none", "--json", ...(options.keepOpen ? ["--keep-open"] : [])];
     const label = (options.labelPrefix ?? "Pi · ") + title;
     let args: string[];
+    if (placement !== "session" && !source) throw new Error("An exact Rex source anchor is required");
     if (placement === "session") args = ["new", options.sessionName === undefined ? label : sessionName(options.sessionName), "--window", title, ...common];
-    else if (placement === "tab") args = ["window", "new", "-s", source.sessionId, label, "--focus=" + focus, ...common];
-    else args = ["split", "-s", source.sessionId, "-b", source.blockId, "--split=" + (placement === "down" ? "below" : "right"),
-      "--label=" + title, "--focus=" + focus, ...common];
+    else if (placement === "tab") {
+      if (!source) throw new Error("An exact Rex source anchor is required");
+      args = ["window", "new", "-s", source.sessionId, label, "--focus=" + focus, ...common];
+    } else {
+      if (!source) throw new Error("An exact Rex source anchor is required");
+      args = ["split", "-s", source.sessionId, "-b", source.blockId, "--split=" + (placement === "down" ? "below" : "right"),
+        "--label=" + title, "--focus=" + focus, ...common];
+    }
     const value = await this.json([...args, "--", ...command], signal);
     if (placement === "session") {
       const sessionId = value.session_id;
@@ -231,9 +268,14 @@ export class Rex {
       return { sessionId, windowId: window.window_id, blockId: blocks[0] };
     }
     const blocks = array(value.block_ids);
+    if (!source) throw new Error("An exact Rex source anchor is required");
     if (blocks.length !== 1 || !rexId(blocks[0], "block") || (value.window_id !== undefined && !rexId(value.window_id, "window")))
       throw new Error("Rex creation response lacks an exact block ID");
+    if (placement === "tab" && !rexId(value.window_id, "window"))
+      throw new Error("Rex tab creation response lacks an exact window ID");
+    if (placement !== "tab" && value.window_id !== undefined && value.window_id !== source.windowId)
+      throw new Error("Rex split creation response names a different window");
     return { sessionId: source.sessionId, blockId: blocks[0],
-      ...(value.window_id ? { windowId: value.window_id as string } : {}) };
+      windowId: placement === "tab" ? value.window_id as string : source.windowId };
   }
 }

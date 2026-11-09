@@ -13,6 +13,7 @@ import { Rex } from "../lib/rex.ts";
 import { requireFeature, Runtime } from "../lib/runtime.ts";
 import { BindingStore } from "../lib/store.ts";
 import { TerminalOpener } from "../lib/terminal.ts";
+import { RemoteTerminalOpener } from "../lib/remote-terminal.ts";
 import { LAUNCH_PLACEMENTS, LAUNCH_ROLES, THINKING, literalUnion } from "./schemas.ts";
 import { registerTerminalFeatures } from "./terminal.ts";
 import { ProjectResolver } from "../lib/projects.ts";
@@ -36,6 +37,8 @@ import { FanoutRegistry, FanoutRuntime } from "../lib/fanout.ts";
 import { JoinCache, JoinRuntime } from "../lib/join.ts";
 import { registerFanoutTools } from "./fanout.ts";
 import { registerDelegationTool } from "./delegation.ts";
+import { createNodeHostSelection, registerHostTools } from "./hosts.ts";
+import { HOST_SELECTION_ENTRY, type HostSelection } from "../lib/host-selection.ts";
 
 const schema = Type.Object({
   prompt: Type.Optional(Type.String({ maxLength: 16384, description: "Initial task; omit for idle." })),
@@ -90,9 +93,11 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   let capabilityContext: ExtensionContext | undefined;
   let capabilityFailure: string | undefined;
   let peer: PeerRuntime | undefined;
+  let hostSelection: HostSelection | undefined;
   const agentRuntime = new AgentRuntime();
   observeMessaging(pi, () => messaging);
   let terminal: TerminalOpener | undefined;
+  let remoteTerminal: RemoteTerminalOpener | undefined;
   let sessions: SessionOpener | undefined;
   const worktrees = registerWorktreesCommand(pi, () => ({ runtime, launcher }));
   // Launch outcomes are evidence, not branch-relative authority. Keep their fences across
@@ -108,20 +113,24 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const agentDirectory = getAgentDir();
   const stateDirectory = resolve(process.env.PI_REX_STATE_DIR ?? join(agentDirectory, "pi-rex", "bindings"));
   const extension = fileURLToPath(import.meta.url);
-  const stop = () => {
+  const stop = (): Promise<void> => {
+    const cleanup = hostSelection?.stop() ?? Promise.resolve();
     activation++; agents.cancel(); worktrees.cancel();
     capability?.revoke(); capabilityContext = undefined; localAgentHandle = undefined;
     messaging?.detach(); messaging = undefined;
     agentRuntime.detach();
     peer?.detach(); peer = undefined;
+    hostSelection = undefined;
     runtime?.stop(); runtime = undefined;
-    launcher = undefined; delegation = undefined; fanout = undefined; joinRuntime = undefined; terminal = undefined; sessions = undefined;
+    launcher = undefined; delegation = undefined; fanout = undefined; joinRuntime = undefined;
+    terminal = undefined; remoteTerminal = undefined; sessions = undefined;
+    return cleanup;
   };
 
   const initialize = async (ctx: ExtensionContext, allowBootstrap: boolean) => {
     // Reinitialization is positive local replacement evidence; retained results/events remain readable.
     agentRuntime.replaceAll();
-    stop();
+    await stop();
     const generation = activation;
     let seed: Bootstrap | undefined;
     let agentSeed: AgentHandle | undefined;
@@ -171,6 +180,21 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       runtime = active;
       await active.start(ctx, state => pi.appendEntry(ORIENTATION_ENTRY, state), seed);
       if (generation !== activation) { active.stop(); return; }
+      try {
+        const allSettings = pi.getSettings() as { "pi-rex"?: { hosts?: unknown } };
+        hostSelection = createNodeHostSelection(active, {
+          settings: allSettings["pi-rex"]?.hosts,
+          entries: ctx.sessionManager.getBranch(),
+          persist: intent => pi.appendEntry(HOST_SELECTION_ENTRY, intent),
+          exec: (command, args, execOptions) => pi.exec(command, args, execOptions),
+          rexBinary: rex.binary,
+          journalDirectory: join(stateDirectory, "tunnels"),
+        });
+      } catch (error) {
+        hostSelection = undefined;
+        if (ctx.hasUI) ctx.ui.notify("Rexpi host selection unavailable: " + errorText(error)
+          + "; local Rexpi remains active", "warning");
+      }
       messaging = new MessagingRuntime(pi, active, agentDirectory, { transport: options.messagingTransport ?? "worker" });
       messaging.attach(ctx);
       peer = new PeerRuntime(pi, active, stateDirectory);
@@ -192,6 +216,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       fanout = new FanoutRuntime(delegation, fanoutRegistry);
       joinRuntime = new JoinRuntime(delegation, joinCache);
       terminal = new TerminalOpener(active);
+      remoteTerminal = hostSelection ? new RemoteTerminalOpener(hostSelection,
+        ticket => new Rex(rex.binary, (command, args, options) => pi.exec(command, args, options), ticket.endpoint)) : undefined;
       sessions = new SessionOpener(active, launcher, (query, cwd, signal) => resolver.resolve(query, cwd, signal), process.env.PI_REX_CLIENT);
       if (!shortcutRegistered) {
         shortcutRegistered = true;
@@ -263,23 +289,24 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         });
         registerMessageSend(toolApi, () => messaging);
         registerMessagingControls(toolApi, () => ({ runtime, messaging }));
-        registerConversationTools(toolApi, () => ({ runtime, messaging, agent: agentRuntime }));
+        registerHostTools(toolApi, () => ({ runtime, hostSelection }));
+        registerConversationTools(toolApi, () => ({ runtime, messaging, agent: agentRuntime, hostSelection }));
         registerPeerTools(toolApi, () => ({ runtime, peer }));
         registerAgentTools(toolApi, () => ({ runtime, peer, agent: agentRuntime, localAgentHandle: agentSeed }));
         registerDelegationTool(toolApi, () => ({ runtime, delegation, messaging, capability, cache: delegationCalls }));
         registerFanoutTools(toolApi, () => ({ runtime, fanout, join: joinRuntime, registry: fanoutRegistry, messaging, capability }));
-        registerTerminalFeatures(toolApi, () => ({ runtime, terminal }), ctx);
+        registerTerminalFeatures(toolApi, () => ({ runtime, terminal, remoteTerminal, hostSelection }), ctx);
         registerSessionTool(toolApi, () => ({ runtime, sessions }));
       }
     } catch (error) {
       if (generation !== activation) return;
-      stop();
+      await stop();
       if (ctx.hasUI) ctx.ui.notify("Rexpi unavailable: " + errorText(error), "warning");
     }
   };
   pi.on("session_start", (_event, ctx) => initialize(ctx, true));
   pi.on("session_tree", (_event, ctx) => initialize(ctx, false));
-  pi.on("session_shutdown", stop);
+  pi.on("session_shutdown", async () => { await stop(); });
   pi.on("tool_call", (event, ctx) => capability?.guardTool(event.toolName, event.input, ctx)
     ?? (capabilityFailure ? { block: true as const, reason: capabilityFailure } : undefined));
   pi.on("turn_start", (_event, ctx) => {

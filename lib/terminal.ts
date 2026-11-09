@@ -5,7 +5,7 @@ import { Runtime } from "./runtime.ts";
 import { cleanTitle } from "./state.ts";
 import type { Created } from "./rex.ts";
 
-export type TerminalPlacement = "right" | "down" | "tab" | "floating";
+export type TerminalPlacement = "session" | "right" | "down" | "tab" | "floating";
 /** Retained outcomes are small; the bound only forces an explicit reload in pathological sessions. */
 const MAX_REQUESTS = 4096;
 export type Bounds = [number, number, number, number];
@@ -19,10 +19,29 @@ export interface TerminalOptions {
   keepOpen?: boolean;
   bounds?: Bounds;
 }
+export interface TerminalExecutionHost {
+  kind: "local" | "remote";
+  alias: string;
+  configuration: "local" | "configured";
+  /** Configured rex hosts identity, distinct from the server UUIDs below. */
+  configuredHostId?: string;
+  expectedServerHostId?: string;
+  expectedServerInstanceId?: string;
+  /** Identity verified at the server used for this operation. */
+  serverHostId: string;
+  serverInstanceId: string;
+}
+export interface TerminalLocalOrigin {
+  blockId: string;
+  serverHostId: string;
+  serverInstanceId: string;
+}
 export interface TerminalResult {
   requestId: string;
   creation: "confirmed" | "unknown";
   placement: TerminalPlacement;
+  executionHost: TerminalExecutionHost;
+  localOrigin: TerminalLocalOrigin;
   target?: Created;
   reason?: string;
 }
@@ -42,7 +61,7 @@ export function validateTerminal(options: TerminalOptions): void {
     throw new Error("command must be a valid executable/argument array");
   else if (cmd.reduce((size, v) => size + v.length, 0) > 32768)
     throw new Error("command arguments exceed the 32,768-character total limit");
-  if (options.placement !== undefined && !["right", "down", "tab", "floating"].includes(options.placement)) throw new Error("Invalid terminal placement");
+  if (options.placement !== undefined && !["session", "right", "down", "tab", "floating"].includes(options.placement)) throw new Error("Invalid terminal placement");
   for (const name of ["cwd", "title"] as const) {
     const value = options[name];
     if (value !== undefined && (typeof value !== "string" || !value.trim() || value.length > (name === "title" ? 120 : 4096)
@@ -62,9 +81,29 @@ export function terminalArgv(command: Command, cwd: string, path: string): strin
     : [executable(command[0], cwd, path), ...command.slice(1)])];
 }
 export function terminalText(result: TerminalResult): string {
-  if (result.creation === "unknown") return "Terminal creation outcome is unknown. " + result.reason;
-  return "Created " + result.placement + " terminal " + result.target!.blockId
-    + ". Creation is not command readiness, success, or completion.";
+  if (result.executionHost.kind === "local") {
+    if (result.creation === "unknown") return "Terminal creation outcome is unknown. " + result.reason;
+    return "Created " + result.placement + " terminal " + result.target!.blockId
+      + ". Creation is not command readiness, success, or completion.";
+  }
+  if (result.creation === "unknown") return "Terminal creation outcome is unknown on host '" + result.executionHost.alias + "'. " + result.reason;
+  return "Created " + result.placement + " terminal " + result.target!.blockId + " on host '" + result.executionHost.alias
+    + "' (host_id=" + result.executionHost.serverHostId + ", instance_id=" + result.executionHost.serverInstanceId
+    + "). Creation is not command readiness, success, or completion.";
+}
+export function localTerminalEvidence(own: { server: { hostId: string; instanceId: string }; blockId: string }): {
+  executionHost: TerminalExecutionHost; localOrigin: TerminalLocalOrigin;
+} {
+  return {
+    executionHost: { kind: "local", alias: "local", configuration: "local",
+      serverHostId: own.server.hostId, serverInstanceId: own.server.instanceId },
+    localOrigin: { blockId: own.blockId, serverHostId: own.server.hostId, serverInstanceId: own.server.instanceId },
+  };
+}
+export function unknownTerminalResult(requestId: string, placement: TerminalPlacement,
+    evidence: { executionHost: TerminalExecutionHost; localOrigin: TerminalLocalOrigin }): TerminalResult {
+  return { requestId, creation: "unknown", placement, ...evidence,
+    reason: "The command may have started before its creation reply was lost or interrupted. Inspect Rex before any deliberate retry; no retry or cleanup was attempted." };
 }
 /** Arbitrary terminal commands, separate from Pi conversation launches and configured shortcuts. */
 export class TerminalOpener {
@@ -99,10 +138,9 @@ export class TerminalOpener {
       const target = await this.runtime.rex.create({ placement, source, cwd: directory, command, title,
         focus: options.focus ?? true, keepOpen: options.keepOpen ?? false, labelPrefix: "",
         ...(placement === "floating" ? { bounds: options.bounds ?? [0.1, 0.1, 0.8, 0.8] } : {}) }, combined);
-      return { requestId: id, creation: "confirmed", placement, target };
+      return { requestId: id, creation: "confirmed", placement, ...localTerminalEvidence(own), target };
     } catch {
-      return { requestId: id, creation: "unknown", placement,
-        reason: "The command may have started before its creation reply was lost or interrupted. Inspect Rex before any deliberate retry; no retry or cleanup was attempted." };
+      return unknownTerminalResult(id, placement, localTerminalEvidence(own));
     }
   }
 }
