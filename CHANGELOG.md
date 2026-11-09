@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Add named local Rex layouts: `/rxl` (`/rxlayouts`) provides a read-only searchable picker with previews, direct opening, active-tab capture/save, and preview-only views. Tool-neutral `build`, `inspect`, and `observe` layouts reuse the running Pi pane and conversation in a new tab, with labeled shells for editing, review, and monitoring. Specific applications are opt-in through user-saved specs, not built-in dependencies. No Pi restart, unrelated-pane closure, redundant single-pane preset, or automatic agent launching.
 - Add `rexpi_layout` for conversational save, capture, list, show, open, and delete operations. Private versioned specs exclude transient identities; overwriting user layouts is explicit and built-ins are protected. Capture reports shell fallback rather than guessing foreground commands. Uncertain Rex mutations stop without automatic retry or rollback.
