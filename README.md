@@ -25,7 +25,7 @@ But it comes with batteries included. There are commands and shortcuts too; you 
 ## Capabilities
 
 - **Your tools, where you want them.** Add custom commands to open Helix, Hunk, logs, or whatever else you keep running in splits, tabs, and floating panes.
-- **Agents that report back.** Ask for a fresh review and request the findings back. Related agents can exchange messages, and opted-in review results come back to the parent conversation automatically. No copy-paste courier service required.
+- **Agents that report back.** Ask for a fresh review and request the findings back. Related agents can exchange messages, and opted-in review results come back to the parent conversation automatically. No copy-paste courier service required. Delegated prompts include the exact tool/path grant and delivery budget, and incomplete result-return grants are rejected before launch.
 - **Coordinator workflows that stay inspectable.** Delegate and fan out supervised subagents with visible handles, bounded result waits, compact status and inbox output, and quiet completion. Use `verbose:true` for full evidence and bounded text projection for oversized conversations.
 - **Projects by name.** Open an existing project by path or let zoxide find it. Start a fresh Pi there without changing your current conversation's directory.
 - **Find the agent you lost.** Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes. The seventh tab was not, in fact, the last one.

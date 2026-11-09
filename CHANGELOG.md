@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Validate the complete delegation result-delivery grant before launch: `returnResults:true` now requires `rexpi_message_send` alongside `rexpi_agent_complete`, with no child created on rejection. Delegated prompts include a compact tool/read/write-path manifest and turn-delivery guidance so reviewers do not need to discover their own grant.
+
 ## 0.2.0
 
 - Allow image-heavy Pi histories in result-return setup by replacing the incompatible 1 MiB per-entry limit with a 32 MiB aggregate bound, and clarify idle `rexpi_start_pi` sessions versus required-task `rexpi_delegate` work.

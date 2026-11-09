@@ -51,7 +51,12 @@ test("delegation composes a fresh related launch with literal task/grant and ind
   assert.equal(result.launch.returnSetup, undefined);
   assert.equal(f.w.created.length, 1);
   const prompt = f.w.created[0].at(-1);
-  assert.equal(prompt, task);
+  assert.ok(prompt.startsWith(task + "\n\nDelegation capability manifest:\n"));
+  assert.match(prompt, /Allowed tools: read, rexpi_message_send, rexpi_agent_complete/);
+  assert.match(prompt, /Read paths: \./);
+  assert.match(prompt, /Write paths: none/);
+  assert.match(prompt, /Turn budget: 3; result return: disabled/);
+  assert.match(prompt, /Reserve the final turn for rexpi_agent_complete/);
   const encoded = f.w.created[0].find(value => value.startsWith(CAPABILITY_GRANT_ENV + "="));
   assert.deepEqual(decodeCapabilityGrant(encoded.slice(encoded.indexOf("=") + 1)), grant());
   assert.equal(JSON.stringify(result).includes("token"), false);
@@ -72,7 +77,9 @@ test("result correlation and settlement subscription use the exact issued capabi
     assert.equal(result.handle[field], result.returnSetup[field], field);
   assert.notEqual(result.handle.runtimeId, result.returnSetup.runtimeId,
     "child agent runtime and parent messaging runtime are separate evidence domains");
-  assert.ok(f.w.created[0].at(-1).startsWith(task + "\n\n"));
+  assert.ok(f.w.created[0].at(-1).startsWith(task + "\n\nDelegation capability manifest:"));
+  assert.match(f.w.created[0].at(-1), /Turn budget: 3; result return: enabled/);
+  assert.match(f.w.created[0].at(-1), /Reserve the final two turns for rexpi_message_send and rexpi_agent_complete/);
   assert.match(f.w.created[0].at(-1), /inReplyTo=/);
   assert.deepEqual(result.subscription, { settlement: true });
   f.agent.observeLocalSettlement(result.launch.identity);
@@ -86,7 +93,7 @@ test("real child bootstrap supports explicit completion and settlement without c
   const f = await fixture(t), result = await f.delegation.delegate("real-child-contract", "Complete the assigned task",
     { grant: grant(), notifyParentOnSettlement: true }, f.root);
   const args = f.w.created[0], prompt = args.at(-1);
-  assert.equal(prompt, "Complete the assigned task");
+  assert.ok(prompt.startsWith("Complete the assigned task\n\nDelegation capability manifest:"));
   assert.ok(args.includes(AGENT_NOTIFY_SETTLEMENT_ENV + "=1"));
 
   const child = new AgentRuntime(), notifications = [];
@@ -127,6 +134,9 @@ test("rejected grants create nothing and creation/binding failures preserve sepa
   assert.equal(f.w.created.length, 0);
   await assert.rejects(f.delegation.delegate("missing-completion-tool", "task", { grant: grant({ tools: ["read"] }) }, f.root),
     /rexpi_agent_complete/);
+  await assert.rejects(f.delegation.delegate("missing-result-tool", "task",
+    { grant: grant({ tools: ["read", "rexpi_agent_complete"], returnResults: true }) }, f.root),
+  /returnResults=true requires rexpi_message_send/);
   assert.equal(f.w.created.length, 0);
   f.w.failCreate = true;
   const unknown = await f.delegation.delegate("unknown-create", "task", { grant: grant() }, f.root);

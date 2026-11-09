@@ -73,6 +73,19 @@ export class DelegationCache {
   }
 }
 
+function delegatedPrompt(task: string, grant: CapabilityGrant): string {
+  const delivery = grant.returnResults
+    ? "Reserve the final two turns for rexpi_message_send and rexpi_agent_complete."
+    : "Reserve the final turn for rexpi_agent_complete.";
+  return task + "\n\nDelegation capability manifest:\n"
+    + "- Allowed tools: " + (grant.tools.join(", ") || "none") + "\n"
+    + "- Read paths: " + (grant.readPaths.join(", ") || "none") + "\n"
+    + "- Write paths: " + (grant.writePaths.join(", ") || "none") + "\n"
+    + "- Turn budget: " + grant.turns + "; result return: " + (grant.returnResults ? "enabled" : "disabled") + ".\n"
+    + "Use the full absolute path for every absolute path grant. Do not access unrelated paths or load additional "
+    + "extensions when a capability is missing; report the blocker instead. " + delivery;
+}
+
 type AgentControls = Pick<AgentRuntime, "status" | "result" | "cancel" | "stop">;
 export class DelegationRuntime {
   private readonly launcher: Pick<Launcher, "launch">;
@@ -94,8 +107,10 @@ export class DelegationRuntime {
     const grant = parseCapabilityGrant(options.grant);
     if (!grant.tools.includes("rexpi_agent_complete"))
       throw new Error("Delegation grant requires rexpi_agent_complete for explicit completion evidence");
+    if (grant.returnResults && !grant.tools.includes("rexpi_message_send"))
+      throw new Error("Delegation grant with returnResults=true requires rexpi_message_send for result delivery");
     const launch = await this.launcher.launch(id, {
-      prompt: task, related: true, role: "chat", returnResults: grant.returnResults, grant,
+      prompt: delegatedPrompt(task, grant), related: true, role: "chat", returnResults: grant.returnResults, grant,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.project === undefined ? {} : { project: options.project }),
       ...(options.placement === undefined ? {} : { placement: options.placement }),
