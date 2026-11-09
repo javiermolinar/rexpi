@@ -30,6 +30,7 @@ But it comes with batteries included. There are commands and shortcuts too; you 
 - **Coordinator workflows that stay inspectable.** Delegate and fan out supervised subagents with visible handles, bounded result waits, compact status and inbox output, and quiet completion. Use `verbose:true` for full evidence and bounded text projection for oversized conversations.
 - **Projects by name.** Open an existing project by path or let zoxide find it. Start a fresh Pi there without changing your current conversation's directory.
 - **Find the agent you lost.** Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes. The seventh tab was not, in fact, the last one.
+- **Named layouts.** Describe a workspace to Pi, save it by name, and reopen it from a read-only picker with previews. Layouts can reuse the current Pi pane without restarting its conversation.
 - **Worktree housekeeping.** Browse a repository's Git worktrees, open one in Pi, or mark old ones for confirmed removal. Dirty worktrees and worktrees with live agents are protected; branches stay put.
 
 New agents get fresh conversations, not a copy of yours. Returning findings is opt-in and can trigger additional model turns. **Ctrl+Alt+M** stops future returns without killing the agents.
@@ -66,6 +67,10 @@ pi -e ./extensions/index.ts
 | `/rxt [task]` | Start fresh Pi in a new tab |
 | `/rxa` or `/rxagents` | Find an agent and jump to its pane |
 | `/rxw` or `/rxworktrees` | Browse, open, or remove Git worktrees |
+| `/rxl` or `/rxlayouts` | Browse named layouts with a read-only preview |
+| `/rxl NAME` | Open a layout in a new tab, reusing its current-Pi slot |
+| `/rxl save NAME [--overwrite]` | Capture and save the active Rex tab |
+| `/rxl preview NAME` or `/rxl preview current` | Preview a saved layout or the active tab without opening it |
 
 Leave out `[task]` for an empty conversation. These launch commands don't enable automatic result returns; ask Pi to delegate and send findings back for that.
 
@@ -80,6 +85,73 @@ The `rexpi_start_pi` tool follows the same rule: omit `prompt` only when you wan
 In either panel, type to search, use the arrow keys to move, and press Enter to open. **Esc** closes and **Ctrl+R** refreshes. In the worktree panel, **Space** marks a worktree and **Ctrl+D** asks to remove marked entries. Removal requires confirmation; it isn't a surprise keyboard shortcut.
 
 You can also just ask Pi to open or reuse a named workspace, choose a model for a new agent, return to its parent, or inspect incoming findings. Those use tools rather than more slash commands.
+
+## Layouts
+
+Ask Pi:
+
+> “Create a build layout with you on the left, an editor shell at the top right, and another shell below it. Save it as `my-build`.”
+
+Pi uses `rexpi_layout` to validate and save a declarative spec. Saving does **not** open panes or run commands. Then use `/rxl my-build`, or `/rxl` to search built-in and user layouts and see a preview. **Enter** opens the selected layout; **Esc** cancels; **Ctrl+R** refreshes. Preview-only views close on Enter or Esc. The overlay has no editing controls.
+
+Built-ins are named for concrete workflows:
+
+| Layout | Arrangement |
+|---|---|
+| **Build** (`build`) | Pi left; editor shell above another shell on the right |
+| **Inspect** (`inspect`) | Pi left; review shell right |
+| **Observe** (`observe`) | Pi above a shell on the left; monitor shell full-height right |
+
+Use `/rxl build`, `/rxl inspect`, or `/rxl observe` to open one. Each gives Pi half the width; Build and Observe give the upper pane 65% of its column's height. All keep focus on the current Pi. New terminals start in Pi's invoking directory.
+
+These are **tool-neutral arrangements**, not application bundles. Every non-Pi pane starts an ordinary login shell; labels such as “Editor shell” describe its intended use, not an already-running editor. No editor, diff viewer, monitoring tool, Git repository, or Kubernetes access is required. No layout opens by default, and Rexpi installs no dependencies. There is no `focus` built-in: a single Pi pane is already the default Rex/Rexpi experience. There is no `agent-swarm` built-in; arranging terminals does not launch or coordinate agents.
+
+Opening creates a new tab in the **current local Rex session**, even if a remote execution host is selected. A `role: "pi", source: "current"` leaf reuses the exact running Pi pane and conversation; it never launches another Pi. Other panes remain where they are. If Pi was the only pane in its original tab, that now-empty tab disappears. A layout with no Pi slot opens terminals and leaves Pi in its original tab. Focus follows an explicitly focused leaf, otherwise the Pi slot or first terminal.
+
+The whole operation is not atomic: Rex first creates the nested layout, then swaps the current Pi with an owned temporary shell placeholder, verifies the same process and binding, closes only that placeholder, and verifies topology and focus. On an interrupted or uncertain mutation, Rexpi reports confirmed resource IDs and stops. Commands may already be running; inspect Rex before making another request. No automatic retry or rollback occurs. Pane creation is not proof of command readiness or success.
+
+### Create and capture
+
+`rexpi_layout` supports `save`, `capture`, `list`, `show`, `open`, and `delete`. Use `show` on a built-in to inspect the spec before creating a variation. An example `save` input:
+
+```json
+{
+  "action": "save",
+  "name": "my-build",
+  "layout": {
+    "version": 1,
+    "root": {
+      "type": "split", "direction": "row", "ratio": 0.5,
+      "before": { "type": "terminal", "title": "Pi", "role": "pi", "source": "current", "focus": true },
+      "after": {
+        "type": "split", "direction": "column", "ratio": 0.65,
+        "before": { "type": "terminal", "title": "Editor shell" },
+        "after": { "type": "terminal", "title": "Shell" }
+      }
+    }
+  }
+}
+```
+
+Tools are **opt-in**. Start a tool manually in a shell, or ask Pi to `show` a built-in and `save` a customized copy under a user name. For example, “Copy `inspect` to `my-review` and run `hunk diff` in the review pane.” An explicit `command: ["hunk", "diff"]` on that non-Pi leaf opts into Hunk; `command: ["hx"]` or `command: ["k9s"]` are other optional choices, not built-in defaults. Use whatever editor, diff viewer, or monitor you prefer. Only opening a customized spec requires its chosen executables on PATH; missing executables fail preflight before any panes are created. Saving still runs nothing, and built-ins stay unchanged.
+
+`row` puts `before` on the left; `column` puts it on top. `ratio` is the fraction assigned to `before` (strictly between 0 and 1). Terminal leaves accept literal `command` argv or explicit `shell` text (not both), optional `cwd`, `keepOpen`, and `focus`. Without a command, a new login shell starts. Relative cwd resolves against the invoking Pi's directory. The current-Pi leaf cannot override command, shell, cwd, or keep-open behavior. A spec permits at most 32 panes, 16 levels, one current-Pi slot, and one focused leaf. Names are lowercase letters, digits, and interior hyphens, start with a letter, and contain at most 64 characters. Use the tool for names that coincide with command verbs such as `save` or `preview`.
+
+To capture an arrangement, arrange panes in Rex and run `/rxl save my-workspace`. Capture reads the **active tab** in Pi's Rex session, not necessarily the tab containing Pi. It preserves tiled topology, split ratios, pane labels, and focus. It identifies the invoking Pi only when that exact pane is present. Floating layers and unsupported block types are rejected rather than silently omitted.
+
+**Capture is not process restoration.** Current Rex snapshots expose structure but not declared terminal launch argv/cwd. Those panes become new shell leaves, with the fallback titles reported when saving; terminal contents and foreground processes are never scraped to guess commands. Describe commands to Pi when creating a reusable spec instead.
+
+User layouts live in `getAgentDir()/pi-rex/layouts` (normally `~/.pi/agent/pi-rex/layouts`), separate from conversation bindings. Private files are written atomically and survive reload. Existing user names require explicit `overwrite: true` or `/rxl save NAME --overwrite`; built-ins cannot be overwritten or deleted. Use the tool's `delete` action to remove a user layout. Saving or deleting a definition never closes existing panes. Specs do not store live process, pane, endpoint, or conversation IDs. Layout commands are unavailable in capability-granted child runtimes; the tool also fails closed without a full local layout runtime.
+
+### Validation
+
+```sh
+npm run test:layouts
+npm run typecheck
+npm run pack:check
+```
+
+For an **explicit live check only**, `node scripts/layout-smoke.mjs` moves the invoking Pi into a three-pane test tab using harmless `cat` processes, verifies its live binding and PID before and after, and closes only the confirmed test panes. It leaves Pi in the new tab. Run it from interactive Pi's shell tool inside Rex, not a standalone terminal without a live Rexpi binding. It is not part of `npm test`. Loading new commands into an existing Pi requires a user-initiated reload or a fresh Pi; validation never reloads automatically.
 
 ## Configure
 

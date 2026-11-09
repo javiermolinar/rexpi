@@ -62,7 +62,7 @@ test("factory has no background IO; verified TUI startup registers the Pi tool",
   assert.ok(f.tools.has("rexpi_inspect"));
   assert.ok(f.tools.get("rexpi_inspect").parameters.properties.includeAgents);
   assert.ok(f.tools.has("rexpi_message_control"));
-  assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
+  assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxl", "rxlayouts", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
   assert.deepEqual(f.shortcuts.map(s => s.key), ["ctrl+alt+m", "ctrl+alt+b", "ctrl+alt+a"]);
   assert.equal(f.w.created.length, 0);
 });
@@ -415,7 +415,7 @@ test("rexpi_start_pi opens project paths with the requested placement and no ext
     assert.match(result.content[0].text, new RegExp("Created a fresh Pi " + placement));
     assert.equal(f.w.created.length, 1);
     assert.equal(f.w.created[0].filter(arg => arg === "--").length, 1, "No initial task prompt");
-    assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
+    assert.deepEqual([...f.commands.keys()].sort(), ["rxa", "rxagents", "rxh", "rxl", "rxlayouts", "rxn", "rxt", "rxv", "rxw", "rxworktrees"]);
   });
 });
 test("rexpi_start_pi resolves zoxide projects without forcing new-tab placement", async t => {

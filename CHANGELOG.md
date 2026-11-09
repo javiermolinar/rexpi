@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add named local Rex layouts: `/rxl` (`/rxlayouts`) provides a read-only searchable picker with previews, direct opening, active-tab capture/save, and preview-only views. Tool-neutral `build`, `inspect`, and `observe` layouts reuse the running Pi pane and conversation in a new tab, with labeled shells for editing, review, and monitoring. Specific applications are opt-in through user-saved specs, not built-in dependencies. No Pi restart, unrelated-pane closure, redundant single-pane preset, or automatic agent launching.
+- Add `rexpi_layout` for conversational save, capture, list, show, open, and delete operations. Private versioned specs exclude transient identities; overwriting user layouts is explicit and built-ins are protected. Capture reports shell fallback rather than guessing foreground commands. Uncertain Rex mutations stop without automatic retry or rollback.
+- Add layout regression tests, `npm run test:layouts`, and an explicit live smoke script that verifies the same Pi process and binding across a layout swap.
+
 ## 0.3.0
 
 - Add configurable multi-host terminal execution: read-only Rex host discovery, explicit per-conversation selection, bounded SSH Unix-socket forwarding, and remote sessions, tabs, splits, and floating panes with exact host/server/resource identities. Remote cwd, executable lookup, and PATH stay remote; disconnects and uncertain creation fail closed without local fallback or automatic retry.

@@ -9,9 +9,10 @@ const patterns = {
   all: /\.test\.mjs$/,
   orchestration: /^(?:agent-|capability-|delegation|fanout|join|launch|messaging-|message-|conversation|peer|extension).*\.test\.mjs$/,
   "agents-ui": /^agents.*\.test\.mjs$/,
+  layouts: /^layout.*\.test\.mjs$/,
 };
 if (!Object.hasOwn(patterns, selection)) {
-  console.error("Usage: node scripts/test-selection.mjs all|orchestration|agents-ui");
+  console.error("Usage: node scripts/test-selection.mjs all|orchestration|agents-ui|layouts");
   process.exit(2);
 }
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");

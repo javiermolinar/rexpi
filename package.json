@@ -22,6 +22,7 @@
     "test": "node scripts/test-selection.mjs all",
     "test:orchestration": "node scripts/test-selection.mjs orchestration",
     "test:agents-ui": "node scripts/test-selection.mjs agents-ui",
+    "test:layouts": "node scripts/test-selection.mjs layouts",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "pack:check": "node scripts/check-package.mjs",

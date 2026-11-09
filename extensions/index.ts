@@ -22,6 +22,10 @@ import { SessionOpener } from "../lib/sessions.ts";
 import { registerSessionTool } from "./sessions.ts";
 import { registerAgentsCommand } from "./agents.ts";
 import { registerWorktreesCommand } from "./worktrees.ts";
+import { registerLayoutsCommand, type LayoutState } from "./layouts.ts";
+import { registerLayoutTool } from "./layout-tool.ts";
+import { LayoutStore } from "../lib/layout-store.ts";
+import { LayoutOpener } from "../lib/layout-open.ts";
 import { MessagingRuntime } from "../lib/messaging/runtime.ts";
 import { observeMessaging, registerMessageSend, registerMessagingControls, stopMessaging } from "./messaging.ts";
 import { registerConversationTools } from "./conversation.ts";
@@ -45,7 +49,7 @@ const schema = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Existing local directory; mutually exclusive with project." })),
   project: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Project path or zoxide query; mutually exclusive with cwd." })),
   placement: Type.Optional(literalUnion(LAUNCH_PLACEMENTS,
-    "Honor the requested location: session=new workspace, right/down=split, tab=new tab. Default: independent=session; first related=right; later/background=tab.")),
+    "session=workspace, right/down=split, tab=tab. Default: independent=session; related=right then tab.")),
   related: Type.Optional(Type.Boolean({ description: "Share task identity only; default false." })),
   returnResults: Type.Optional(Type.Boolean({ description: "Allow result returns; requires prompt, implies related, and may trigger paid follow-ups." })),
   role: Type.Optional(literalUnion(LAUNCH_ROLES, "review implies related=true, not read-only enforcement.")),
@@ -100,6 +104,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   let remoteTerminal: RemoteTerminalOpener | undefined;
   let sessions: SessionOpener | undefined;
   const worktrees = registerWorktreesCommand(pi, () => ({ runtime, launcher }));
+  const layoutState: LayoutState = {};
+  let layouts: ReturnType<typeof registerLayoutsCommand> | undefined;
   // Launch outcomes are evidence, not branch-relative authority. Keep their fences across
   // same-session tree reinitialization, independently of replaceable Launcher/Runtime objects.
   const launchCalls = new OutcomeCache<LaunchResult>(256,
@@ -115,7 +121,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   const extension = fileURLToPath(import.meta.url);
   const stop = (): Promise<void> => {
     const cleanup = hostSelection?.stop() ?? Promise.resolve();
-    activation++; agents.cancel(); worktrees.cancel();
+    activation++; agents.cancel(); worktrees.cancel(); layouts?.cancel();
+    layoutState.runtime = undefined; layoutState.store = undefined; layoutState.opener = undefined;
     capability?.revoke(); capabilityContext = undefined; localAgentHandle = undefined;
     messaging?.detach(); messaging = undefined;
     agentRuntime.detach();
@@ -180,6 +187,12 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       runtime = active;
       await active.start(ctx, state => pi.appendEntry(ORIENTATION_ENTRY, state), seed);
       if (generation !== activation) { active.stop(); return; }
+      if (!capability && !capabilityFailure) {
+        layoutState.runtime = active;
+        layoutState.store = new LayoutStore(join(agentDirectory, "pi-rex", "layouts"));
+        layoutState.opener = new LayoutOpener(active);
+        layouts ??= registerLayoutsCommand(pi, () => layoutState, () => !!capability || !!capabilityFailure);
+      }
       try {
         const allSettings = pi.getSettings() as { "pi-rex"?: { hosts?: unknown } };
         hostSelection = createNodeHostSelection(active, {
@@ -297,6 +310,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         registerFanoutTools(toolApi, () => ({ runtime, fanout, join: joinRuntime, registry: fanoutRegistry, messaging, capability }));
         registerTerminalFeatures(toolApi, () => ({ runtime, terminal, remoteTerminal, hostSelection }), ctx);
         registerSessionTool(toolApi, () => ({ runtime, sessions }));
+        registerLayoutTool(toolApi, () => layoutState);
       }
     } catch (error) {
       if (generation !== activation) return;
