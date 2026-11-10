@@ -309,6 +309,24 @@ test("unrelated tasks, stale bindings, replaced processes and detached endpoints
   await assert.rejects(f.parent.peer.read(f.child.endpoint.conversationId, {}));
 });
 
+test("generated names permit read-only cross-task history without enabling peer controls", async t => {
+  const f = await pair(t, false), name = f.child.runtime.snapshot().name;
+  await assert.rejects(f.parent.peer.read(f.child.endpoint.conversationId, {}), /related task/);
+  const page = await f.parent.peer.read(name, { direction: "tail", limit: 10, textOnly: true });
+  assert.equal(page.target.conversationId, f.child.endpoint.conversationId);
+  assert.ok(page.entries.some(entry => entry.text.includes("child history")));
+  assert.equal(f.child.sent.length, 0);
+  await assert.rejects(f.parent.peer.send(name, sendInput()), /conversation ID or generated agent name/);
+  const tools = new Map();
+  registerPeerTools({ registerTool: tool => tools.set(tool.name, tool) },
+    () => ({ runtime: f.parent.runtime, peer: f.parent.peer }));
+  const toolRead = await tools.get("rexpi_read_conversation").execute("named-read",
+    { target: name.toUpperCase(), direction: "tail", limit: 1, textOnly: true }, undefined, undefined, f.parent.ctx);
+  assert.equal(toolRead.details.target.conversationId, f.child.endpoint.conversationId);
+  f.child.peer.detach(); f.child.runtime.stop();
+  await assert.rejects(f.parent.peer.read(name, {}), /not uniquely live|Unknown|stale/i);
+});
+
 test("target branch navigation fences the old endpoint instead of reading a replaced view", async t => {
   const f = await pair(t), first = f.child.sm.getBranch()[0].id;
   f.child.sm.branch(first);
@@ -323,6 +341,12 @@ test("peer protocol rejects cross-task and non-custom-message routes", () => {
   const body = JSON.stringify({ type: "pi-rex.peer", version: 1, id: uuid(), op: "read", from: a, to: b,
     params: { view: "branch", limit: 20 } });
   assert.throws(() => decodePeerRequest(body), /Unrelated/);
+  const named = JSON.parse(body);
+  named.name = "quiet-otter";
+  assert.equal(decodePeerRequest(JSON.stringify(named)).name, "quiet-otter");
+  named.op = "send";
+  named.params = sendInput();
+  assert.throws(() => decodePeerRequest(JSON.stringify(named)), /only for conversation reads/);
   assert.equal(makeEnvelope(a, { ...b, taskId: a.taskId }, "request", "result", "finding").kind, "result");
 });
 

@@ -44,7 +44,7 @@ export function registerConversationTools(pi: ExtensionAPI, current: () => Conve
       const own = active.snapshot();
       const agents = params.includeAgents ? agent?.cachedStatuses().map(agentPresentation) : undefined;
       if (agents) boundedJson(agents, MAX_AGENT_INSPECTION_BYTES, "Agent inspection");
-      const details = { ...own.state, blockId: own.blockId,
+      const details = { ...own.state, name: own.name, blockId: own.blockId,
         localOrigin: { serverHostId: own.server.hostId, serverInstanceId: own.server.instanceId },
         executionHost: hostSelection?.snapshot(),
         children: active.childStatus(), messaging: messaging?.snapshot(),

@@ -29,7 +29,7 @@ But it comes with batteries included. There are commands and shortcuts too; you 
 - **Agents that report back.** Ask for a fresh review and request the findings back. Related agents can exchange messages, and opted-in review results come back to the parent conversation automatically. No copy-paste courier service required. Delegated prompts include the exact tool/path grant and delivery budget, and incomplete result-return grants are rejected before launch.
 - **Coordinator workflows that stay inspectable.** Delegate and fan out supervised subagents with visible handles, bounded result waits, compact status and inbox output, and quiet completion. Use `verbose:true` for full evidence and bounded text projection for oversized conversations.
 - **Projects by name.** Open an existing project by path or let zoxide find it. Start a fresh Pi there without changing your current conversation's directory.
-- **Find the agent you lost.** Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes. The seventh tab was not, in fact, the last one.
+- **Find the agent you lost.** Every Pi conversation receives a persistent generated name such as `quiet-otter`, shown in a colored widget and the agent panel. Search live Pi, Claude, Codex, OpenCode, and Gemini agents across Rex workspaces and jump to their panes.
 - **Named layouts.** Describe a workspace to Pi, save it by name, and reopen it from a read-only picker with previews. Layouts can reuse the current Pi pane without restarting its conversation.
 - **Worktree housekeeping.** Browse a repository's Git worktrees, open one in Pi, or mark old ones for confirmed removal. Dirty worktrees and worktrees with live agents are protected; branches stay put.
 
@@ -85,6 +85,8 @@ The `rexpi_start_pi` tool follows the same rule: omit `prompt` only when you wan
 In either panel, type to search, use the arrow keys to move, and press Enter to open. **Esc** closes and **Ctrl+R** refreshes. In the worktree panel, **Space** marks a worktree and **Ctrl+D** asks to remove marked entries. Removal requires confirmation; it isn't a surprise keyboard shortcut.
 
 You can also just ask Pi to open or reuse a named workspace, choose a model for a new agent, return to its parent, or inspect incoming findings. Those use tools rather than more slash commands.
+
+Generated agent names are assigned automatically, survive reloads, and are never reused by another retained conversation. Child conversations show the relationship as `parent-name > child-name` in the widget. Ask Pi to “read conclusions from quiet-otter” to read a bounded snapshot from that live local conversation without triggering model work there. Named reads work across independent tasks; UUID reads, messaging, cancellation, and stop retain their related-agent restrictions. Names are lookup aliases, not secrets or authorization tokens.
 
 ## Layouts
 

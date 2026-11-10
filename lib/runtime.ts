@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { AgentNameStore } from "./agent-name-store.ts";
 import { BindingStore } from "./store.ts";
 import { Rex } from "./rex.ts";
 import { LEASE_MS, RENEW_MS, isLive, parseOrientation, restoreOrientation, rootOrientation, sameIdentity,
@@ -7,6 +9,7 @@ import { LEASE_MS, RENEW_MS, isLive, parseOrientation, restoreOrientation, rootO
 
 export interface Snapshot {
   state: Orientation;
+  name: string;
   server: Server;
   blockId: string;
   token: string;
@@ -31,9 +34,11 @@ export interface Child {
 export class Runtime {
   readonly rex: Rex;
   readonly store: BindingStore;
+  readonly names: AgentNameStore;
   private readonly blockId: string;
   private readonly pid: number;
   private state?: Orientation;
+  private name?: string;
   private server?: Server;
   private token = randomUUID();
   private generation = 0;
@@ -43,7 +48,7 @@ export class Runtime {
   private children: Child[] = [];
   private hostStatus = "local";
   constructor(rex: Rex, store: BindingStore, blockId: string, pid = process.pid) {
-    this.rex = rex; this.store = store; this.blockId = blockId; this.pid = pid;
+    this.rex = rex; this.store = store; this.names = new AgentNameStore(store); this.blockId = blockId; this.pid = pid;
   }
   stop(): void {
     this.generation++;
@@ -53,8 +58,12 @@ export class Runtime {
     if (this.state) {
       try { this.store.remove(this.state.conversationId, this.token); } catch { /* lease expires if cleanup is unavailable */ }
     }
-    try { this.context?.ui.setStatus("rexpi", undefined); } catch { /* context may be shutting down */ }
-    this.state = undefined; this.server = undefined; this.context = undefined; this.children = []; this.hostStatus = "local";
+    try {
+      this.context?.ui.setStatus("rexpi", undefined);
+      this.context?.ui.setWidget?.("rexpi-agent", undefined);
+    } catch { /* context may be shutting down */ }
+    this.state = undefined; this.name = undefined; this.server = undefined; this.context = undefined;
+    this.children = []; this.hostStatus = "local";
   }
   async start(ctx: ExtensionContext, persist: (state: Orientation) => void, seed?: Bootstrap): Promise<void> {
     this.stop();
@@ -80,12 +89,13 @@ export class Runtime {
     const occupied = this.store.all().some(b => b.blockId === this.blockId && isLive(b, server));
     if (occupied) throw new Error("Another live Rexpi runtime already claims this pane");
     check();
-    const binding = this.binding(state, server);
+    const name = this.names.assign(state);
+    const binding = this.binding(state, server, name);
     this.store.write(binding);
     try {
       if (!restored) persist(state);
       check();
-      this.state = state; this.server = server; this.context = ctx;
+      this.state = state; this.name = name; this.server = server; this.context = ctx;
       this.timer = setInterval(() => {
         try { this.renew(); } catch {
           this.stop();
@@ -99,9 +109,10 @@ export class Runtime {
       throw error;
     }
   }
-  private binding(state: Orientation, server: Server): Binding {
+  private binding(state: Orientation, server: Server, name = this.name): Binding {
+    if (!name) throw new Error("Agent name is not initialized");
     return { version: 1, taskId: state.taskId, conversationId: state.conversationId, piSessionId: state.piSessionId,
-      role: state.role, serverInstance: server.instanceId, hostId: server.hostId, blockId: this.blockId,
+      role: state.role, name, serverInstance: server.instanceId, hostId: server.hostId, blockId: this.blockId,
       token: this.token, pid: this.pid, expiresAt: Date.now() + LEASE_MS };
   }
   private renew(): void {
@@ -114,11 +125,26 @@ export class Runtime {
     this.store.write(this.binding(this.state, this.server));
   }
   private updateStatus(): void {
-    if (!this.state) return;
+    if (!this.state || !this.name) return;
     try {
-      this.context?.ui.setStatus("rexpi", "rex · " + this.state.role + " [" + this.state.taskId.slice(0, 4) + "]"
-        + (this.state.origin ? " · parent linked" : "") + " · host " + this.hostStatus);
-    } catch { /* Status presentation cannot change selection or binding authority. */ }
+      const name = this.name, parent = this.state.origin ? this.names.find(this.state.origin)?.name : undefined;
+      const role = this.state.role + (this.state.origin && !parent ? " · parent linked" : "");
+      const host = "host " + this.hostStatus;
+      this.context?.ui.setStatus("rexpi", undefined);
+      this.context?.ui.setWidget?.("rexpi-agent", (_tui, theme) => ({
+        invalidate() {},
+        render(width: number): string[] {
+          const child = theme.bold(theme.fg("accent", name));
+          const label = parent ? theme.fg("dim", parent + " > ") + child : theme.bold(theme.fg("accent", "● " + name));
+          const suffix = theme.fg("muted", " · " + role);
+          const executionHost = theme.fg("dim", " · " + host);
+          const full = label + suffix + executionHost;
+          if (visibleWidth(full) <= width) return [full];
+          const withoutHost = label + suffix;
+          return [visibleWidth(withoutHost) <= width ? withoutHost : truncateToWidth(label, width, "…")];
+        },
+      }), { placement: "aboveEditor" });
+    } catch { /* Name presentation cannot change selection or binding authority. */ }
   }
   /** HostSelection supplies concise execution-host state; Runtime still owns the local origin status. */
   setHostStatus(status: string): void {
@@ -127,7 +153,8 @@ export class Runtime {
   }
   snapshot(): Snapshot {
     if (!this.state || !this.server) throw new Error("No verified Rexpi conversation; use interactive Pi inside Rex");
-    const snapshot = { state: this.state, server: this.server, blockId: this.blockId, token: this.token,
+    if (!this.name) throw new Error("No verified Rexpi conversation name");
+    const snapshot = { state: this.state, name: this.name, server: this.server, blockId: this.blockId, token: this.token,
       generation: this.generation, signal: this.lifecycle.signal };
     this.assert(snapshot);
     return snapshot;
@@ -138,8 +165,8 @@ export class Runtime {
         || this.context?.sessionManager.getSessionId() !== snapshot.state.piSessionId)
       throw new Error("Pi conversation changed; the operation was not continued");
     const current = this.store.find(snapshot.state, snapshot.server);
-    if (!current || current.token !== snapshot.token || current.pid !== this.pid || current.blockId !== this.blockId)
-      throw new Error("The source conversation binding is no longer uniquely live");
+    if (!current || current.token !== snapshot.token || current.pid !== this.pid || current.blockId !== this.blockId
+        || current.name !== snapshot.name) throw new Error("The source conversation binding is no longer uniquely live");
   }
   async source(snapshot: Snapshot, signal?: AbortSignal): Promise<Target> {
     const combined = signal ? AbortSignal.any([signal, snapshot.signal]) : snapshot.signal;

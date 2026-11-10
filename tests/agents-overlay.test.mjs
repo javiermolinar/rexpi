@@ -113,6 +113,17 @@ test("generic labels fall back to the project directory and duplicate names get 
   assert.equal(a.overlay.selectedRow().key, first.key);
   assert.match(plainLines(a.overlay).join("\n"), /Pane 1/);
 });
+test("generated names lead the row while conversation titles remain searchable details", () => {
+  const a = setup();
+  a.overlay.setList({ unavailable: 0, rows: [row(1, { title: "Review retry behavior",
+    binding: { name: "quiet-otter", role: "review" } })] });
+  const text = plainLines(a.overlay).join("\n");
+  assert.match(text, /├─ quiet-otter|└─ quiet-otter/);
+  assert.match(text, /Pi · Review retry behavior · Review/);
+  assert.doesNotMatch(text, /├─ Review retry behavior|└─ Review retry behavior/);
+  for (const char of "quiet-otter") a.overlay.handleInput(char);
+  assert.match(plainLines(a.overlay).join("\n"), /quiet-otter/);
+});
 test("selected rows use the theme's soft background rather than inverse video", () => {
   const colors = [];
   const style = agentsStyle({ fg: (_color, text) => text, bg: (color, text) => { colors.push(color); return text; }, bold: text => text });

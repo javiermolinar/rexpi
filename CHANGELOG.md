@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Assign persistent Rex/Zellij-style names to Pi conversations, display them in a responsive colored above-editor widget and as primary agent-panel labels, and retain aliases across reloads without reuse. Child widgets show `parent-name > child-name` using retained relationship evidence.
+- Allow `rexpi_read_conversation` to resolve generated names for read-only history snapshots across independent local tasks. Related UUID reads and all messaging/control restrictions remain unchanged.
+
 ## 0.4.0
 
 - Add named local Rex layouts: `/rxl` (`/rxlayouts`) provides a read-only searchable picker with previews, direct opening, active-tab capture/save, and preview-only views. Tool-neutral `build`, `inspect`, and `observe` layouts reuse the running Pi pane and conversation in a new tab, with labeled shells for editing, review, and monitoring. Specific applications are opt-in through user-saved specs, not built-in dependencies. No Pi restart, unrelated-pane closure, redundant single-pane preset, or automatic agent launching.

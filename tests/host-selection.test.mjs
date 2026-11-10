@@ -402,17 +402,19 @@ test("stop is idempotent and returns the pending transport cleanup", async () =>
   await assert.rejects(f.selection.connect("local"));
 });
 
-test("Runtime renders concise selected-host state in the Rexpi status line", async t => {
-  const a = await active(t);
-  const statuses = [];
+test("Runtime renders concise selected-host state in the Rexpi agent widget", async t => {
+  const a = await active(t), statuses = [], widgets = [];
   a.ctx.ui.setStatus = (key, text) => statuses.push({ key, text });
+  a.ctx.ui.setWidget = (...args) => widgets.push(args);
+  const render = () => widgets.at(-1)[1](undefined, { bold: text => text, fg: (_color, text) => text }).render(500).join("\n");
   a.runtime.setHostStatus("local");
   assert.equal(statuses.at(-1).key, "rexpi");
-  assert.match(statuses.at(-1).text, / · host local$/);
+  assert.equal(statuses.at(-1).text, undefined);
+  assert.match(render(), new RegExp(a.runtime.snapshot().name + " · main · host local$"));
   a.runtime.setHostStatus("debian verified");
-  assert.match(statuses.at(-1).text, / · host debian verified$/);
+  assert.match(render(), / · host debian verified$/);
   a.runtime.setHostStatus("debian disconnected/reconnect-required");
-  assert.match(statuses.at(-1).text, / · host debian disconnected\/reconnect-required$/);
+  assert.match(render(), / · host debian disconnected\/reconnect-required$/);
 });
 
 test("host tools and inspect expose verified selection without confusing the local origin", async () => {

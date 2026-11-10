@@ -147,7 +147,7 @@ Every new operation reverifies exact server identity. There is no automatic reco
 
 ## 7. Related agents and messaging boundary
 
-Current protocol decoders require equal `serverInstance` and `hostId`, equal task ID, distinct related conversations/blocks, a unique live local binding, exact recipient/source tokens, local Rex process checks, and a private same-UID Unix socket. Binding and peer storage are local to the Runtime state directory. These checks cannot authenticate or route a remote conversation.
+Current protocol decoders require equal `serverInstance` and `hostId`, distinct conversations/blocks, a unique live local binding, exact recipient/source tokens, local Rex process checks, and a private same-UID Unix socket. Messaging and agent controls also require equal task IDs; read-only history requests may cross task IDs only when addressed by a validated persistent generated agent name. Binding, name, and peer storage are local to the Runtime state directory. These checks cannot authenticate or route a remote conversation.
 
 Until a later phase, related launches, peer reads/sends, result returns, delegation/fan-out/join, and agent cancel/stop remain same-server/local. Mac-to-Debian and Debian-to-Mac use is unsupported, including when both endpoints share a task ID or know each other's host IDs. A remote selection must not change this behavior. Related children of a bound controller still start with local selection under the current new-conversation rules; they never inherit the parent's remote selection, ticket, or host authority implicitly.
 

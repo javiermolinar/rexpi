@@ -16,13 +16,16 @@ function useful(value: string, app: string): boolean {
     && !/^(?:shell|bash|zsh|fish|sh|main|terminal|window(?:\s+[0-9a-f]+)?|(?:block|window|session):[0-9a-f-]+)$/i.test(value);
 }
 /** Prefer task/conversation names; never fill the list with generic "shell" labels. */
-export function agentName(row: AgentRow): string {
+function conversationName(row: AgentRow): string {
   let conversation = agentText(row.conversationTitle).replace(/^π\s*[-–—]\s*/u, "");
   const folder = leaf(row.cwd), suffix = " - " + folder;
   if (folder && conversation.endsWith(suffix) && conversation.length > suffix.length)
     conversation = conversation.slice(0, -suffix.length);
   return [agentText(row.title), conversation, agentText(row.label), agentText(row.windowLabel), folder,
     agentText(row.sessionLabel)].find(value => useful(value, row.app)) || row.app;
+}
+export function agentName(row: AgentRow): string {
+  return row.binding?.name ?? conversationName(row);
 }
 
 
@@ -63,8 +66,9 @@ export class AgentsOverlay extends PickerOverlay<AgentRow> {
       name: agentName,
       status: row => ({ tone: row.state, text: STATUS[row.state] }),
       details: (row, rows) => {
-        const name = agentName(row);
-        const details = [row.app, ...(row.current ? ["Current"] : []), ...(row.binding?.role === "review" ? ["Review"] : [])];
+        const name = agentName(row), conversation = conversationName(row);
+        const details = [row.app, ...(conversation !== name ? [conversation] : []),
+          ...(row.current ? ["Current"] : []), ...(row.binding?.role === "review" ? ["Review"] : [])];
         const duplicates = rows.filter(r => r.sessionId === row.sessionId && agentName(r) === name);
         if (duplicates.length > 1) {
           const panes = [...new Set(duplicates.map(r => r.blockId))].sort();
@@ -78,8 +82,9 @@ export class AgentsOverlay extends PickerOverlay<AgentRow> {
       },
       search: row => {
         const meta = presentations.get(row.key);
-        return [agentName(row), row.app, row.state, row.title, row.conversationTitle, row.message, row.sessionLabel,
-          row.windowLabel, row.label, row.blockId, row.cwd, row.binding?.role, row.pid, row.current ? "you current" : "",
+        return [agentName(row), row.binding?.name, row.app, row.state, row.title, row.conversationTitle, row.message,
+          row.sessionLabel, row.windowLabel, row.label, row.blockId, row.cwd, row.binding?.role, row.pid,
+          row.current ? "you current" : "",
           meta?.parent, meta?.activity?.text, meta?.result?.text]
           .map(v => agentText(String(v ?? ""))).join(" ");
       },

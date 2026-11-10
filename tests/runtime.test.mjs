@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { Rex } from "../lib/rex.ts";
 import { Runtime } from "../lib/runtime.ts";
 import { childBootstrap, rootOrientation } from "../lib/state.ts";
@@ -13,6 +14,8 @@ test("runtime publishes exact identity, restores it on reload, and releases its 
   assert.equal(a.store.find(first.state, first.server), undefined);
   await a.runtime.start(a.ctx, () => assert.fail("restored metadata must not be appended again"));
   assert.deepEqual(a.runtime.snapshot().state, first.state);
+  assert.equal(a.runtime.snapshot().name, first.name);
+  assert.equal(a.store.find(first.state, first.server).name, first.name);
 });
 test("fork/new owners get fresh identity rather than inheriting the parent's origin", async t => {
   const parent = rootOrientation("other-session");
@@ -65,8 +68,21 @@ async function family(t, sameSession = false) {
   t.after(() => child.stop());
   const ctx = { ...a.ctx, sessionManager: { getSessionId: () => seed.piSessionId, getBranch: () => [] } };
   await child.start(ctx, () => {}, seed);
-  return { ...a, child, parent, seed, childTarget };
+  return { ...a, child, childCtx: ctx, parent, seed, childTarget };
 }
+test("child widget shows the retained parent name before its own name", async t => {
+  const a = await family(t), widgets = [];
+  a.runtime.stop(); // The persisted relationship does not require a live parent endpoint.
+  a.childCtx.ui.setWidget = (...args) => widgets.push(args);
+  a.child.setHostStatus("local");
+  const child = a.child.snapshot();
+  const component = widgets.at(-1)[1](undefined, { bold: text => text, fg: (_color, text) => text });
+  const relation = a.parent.name + " > " + child.name;
+  assert.equal(component.render(200).join("\n"), relation + " · review · host local");
+  assert.equal(component.render(relation.length).join("\n"), relation);
+  assert.ok(visibleWidth(component.render(12).join("\n")) <= 12);
+});
+
 test("return focuses the exact live parent conversation", async t => {
   const a = await family(t);
   const target = await a.child.returnToOrigin();
@@ -132,4 +148,39 @@ test("stopped source snapshots cannot authorize navigation or launches", async t
   a.runtime.stop();
   assert.throws(() => a.runtime.assert(snapshot));
   await assert.rejects(a.runtime.source(snapshot));
+});
+
+test("colored agent widget keeps the generated name visible before role and host metadata", async t => {
+  const a = await active(t), statuses = [], widgets = [];
+  a.ctx.ui.setStatus = (...args) => statuses.push(args);
+  a.ctx.ui.setWidget = (...args) => widgets.push(args);
+  a.runtime.setHostStatus("debian");
+  assert.deepEqual(statuses, [["rexpi", undefined]]);
+  assert.equal(widgets.length, 1);
+  const [key, factory, options] = widgets[0], own = a.runtime.snapshot();
+  assert.equal(key, "rexpi-agent");
+  assert.deepEqual(options, { placement: "aboveEditor" });
+  const escape = String.fromCharCode(27);
+  const theme = { bold: text => escape + "[1m" + text + escape + "[0m",
+    fg: (_color, text) => escape + "[31m" + text + escape + "[0m" };
+  const component = factory(undefined, theme);
+  const wide = component.render(120).join("\n");
+  assert.match(wide, new RegExp(own.name));
+  assert.match(wide, /main/);
+  assert.match(wide, /host debian/);
+  assert.match(wide, /\x1b\[/);
+  assert.equal(wide.includes(own.state.taskId.slice(0, 4)), false);
+  const medium = component.render(own.name.length + 10).join("\n");
+  assert.match(medium, new RegExp(own.name));
+  assert.match(medium, /main/);
+  assert.doesNotMatch(medium, /host debian/);
+  const narrow = component.render(own.name.length + 2).join("\n");
+  assert.match(narrow, new RegExp(own.name));
+  assert.doesNotMatch(narrow, /main|host debian/);
+  for (const width of [1, 5, 12, 120]) {
+    for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
+  }
+  a.runtime.stop();
+  assert.equal(widgets.at(-1)[0], "rexpi-agent");
+  assert.equal(widgets.at(-1)[1], undefined);
 });

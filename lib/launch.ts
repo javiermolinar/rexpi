@@ -399,7 +399,7 @@ export class Launcher {
         childPid: observed.child.pid, childBindingId: "sha256:" + createHash("sha256").update(observed.child.token).digest("hex"),
         serverInstance: observed.child.serverInstance, hostId: observed.child.hostId,
         parentBlockId: own.blockId, parentGeneration: own.generation,
-        parentBindingId: "sha256:" + createHash("sha256").update(own.token).digest("hex"), parentName: own.state.piSessionId });
+        parentBindingId: "sha256:" + createHash("sha256").update(own.token).digest("hex"), parentName: own.name });
       this.agentRelations.push(relation);
       try { this.relationStore.write(relation); } catch (error) {
         result.warning = (result.warning ? result.warning + " " : "")

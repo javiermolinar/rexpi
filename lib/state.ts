@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseAgentName } from "./agent-name.ts";
 
 export const ORIENTATION_ENTRY = "pi-rex.orientation";
 export const BOOTSTRAP_ENV = "PI_REX_BOOTSTRAP";
@@ -33,6 +34,8 @@ export interface Server {
 }
 export interface Binding extends Identity {
   version: 1;
+  /** Optional for legacy/wire compatibility; new local bindings always include one. */
+  name?: string;
   serverInstance: string;
   hostId: string;
   blockId: string;
@@ -112,6 +115,7 @@ export function parseBinding(value: unknown): Binding {
   if (v.version !== 1 || !uuid(v.serverInstance) || !uuid(v.hostId) || !rexId(v.blockId, "block")
       || !uuid(v.token) || !Number.isSafeInteger(v.pid) || Number(v.pid) <= 0
       || !Number.isSafeInteger(v.expiresAt)) throw new Error("Invalid Rexpi binding");
-  return { version: 1, ...identity(v), serverInstance: v.serverInstance, hostId: v.hostId,
-    blockId: v.blockId, token: v.token, pid: Number(v.pid), expiresAt: Number(v.expiresAt) };
+  return { version: 1, ...identity(v), ...(v.name === undefined ? {} : { name: parseAgentName(v.name) }),
+    serverInstance: v.serverInstance, hostId: v.hostId, blockId: v.blockId, token: v.token,
+    pid: Number(v.pid), expiresAt: Number(v.expiresAt) };
 }

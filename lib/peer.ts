@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server as SocketServer, type Socke
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { canonicalAgentName } from "./agent-name.ts";
 import { identity as parseIdentity, isLive, piSessionId as validPiSessionId, record, sameIdentity, uuid, type Identity } from "./state.ts";
 import type { Runtime, Snapshot } from "./runtime.ts";
 import { assertSameAgentRun, parseAgentHandle, type AgentHandle } from "./agent.ts";
@@ -34,6 +35,8 @@ export interface PeerSendInput {
 }
 interface PeerRequest {
   type: typeof PROTOCOL; version: 1; id: string;
+  /** Present only for reads addressed by a generated alias; it authorizes no other operation. */
+  name?: string;
   op: "read" | "send" | "agentActivity" | "agentResult" | "agentCancel" | "agentStop";
   from: Endpoint; to: Endpoint; params: PeerReadInput | PeerSendInput | AgentHandle | PeerAgentControlInput | Record<string, never>;
 }
@@ -211,14 +214,18 @@ function agentControlInput(value: unknown): PeerAgentControlInput {
 export function decodePeerRequest(body: string): PeerRequest {
   if (Buffer.byteLength(body) > MAX_PEER_REQUEST_BYTES) throw new Error("Peer request exceeds 40 KiB");
   const v = record(JSON.parse(body));
-  keys(v, ["type", "version", "id", "op", "from", "to", "params"]);
+  keys(v, ["type", "version", "id", "op", "from", "to", "params",
+    ...(Object.hasOwn(v, "name") ? ["name"] : [])]);
   if (v.type !== PROTOCOL || v.version !== 1 || !uuid(v.id)
       || !["read", "send", "agentActivity", "agentResult", "agentCancel", "agentStop"].includes(String(v.op)))
     throw new Error("Invalid peer request");
+  const name = v.name === undefined ? undefined : canonicalAgentName(v.name);
+  if (name !== undefined && v.op !== "read") throw new Error("Agent names are valid only for conversation reads");
   const from = endpoint(v.from), to = endpoint(v.to);
-  if (from.taskId !== to.taskId || from.serverInstance !== to.serverInstance || from.hostId !== to.hostId
+  if ((from.taskId !== to.taskId && name === undefined) || from.serverInstance !== to.serverInstance || from.hostId !== to.hostId
       || from.conversationId === to.conversationId || from.blockId === to.blockId) throw new Error("Unrelated or invalid peer route");
   return { type: PROTOCOL, version: 1, id: v.id, op: v.op as PeerRequest["op"], from, to,
+    ...(name === undefined ? {} : { name }),
     params: v.op === "read" ? readInput(v.params) : v.op === "send" ? sendInput(v.params)
       : v.op === "agentResult" ? agentResultInput(v.params)
         : v.op === "agentActivity" ? agentActivityInput(v.params) : agentControlInput(v.params) };
@@ -528,9 +535,10 @@ export class PeerRuntime {
     if (!this.ctx || ctx.sessionManager !== this.ctx.sessionManager) throw new Error("Stale Pi agent-end context");
     this.guard(); this.settled = true;
   }
-  private async verifySource(source: Endpoint, signal: AbortSignal): Promise<void> {
+  private async verifySource(source: Endpoint, signal: AbortSignal, namedRead = false): Promise<void> {
     this.guard();
-    if (source.taskId !== this.owner!.taskId) throw new Error("Cross-task peer access requires a separate authorization flow");
+    if (!namedRead && source.taskId !== this.owner!.taskId)
+      throw new Error("Cross-task peer access requires a generated conversation name and read-only access");
     assertLiveEndpoint(source, this.runtime.store, this.own!.server);
     const target = await this.runtime.rex.locate(source.blockId, signal);
     await this.runtime.rex.verifyProcess(target, source.pid, signal);
@@ -539,7 +547,12 @@ export class PeerRuntime {
   }
   private async dispatch(request: PeerRequest, signal: AbortSignal): Promise<PeerResult> {
     if (!sameEndpoint(request.to, this.owner!)) throw new Error("Stale or mismatched peer recipient");
-    await this.verifySource(request.from, signal); signal.throwIfAborted(); this.guard();
+    if (request.name !== undefined) {
+      const named = this.runtime.names.resolve(request.name), current = this.runtime.store.find(named, this.own!.server);
+      if (!sameIdentity(named, this.owner!) || !current || current.name !== request.name
+          || !sameEndpoint(endpointFromBinding(current), this.owner!)) throw new Error("Stale or mismatched named conversation");
+    }
+    await this.verifySource(request.from, signal, request.name !== undefined); signal.throwIfAborted(); this.guard();
     if (request.op === "agentActivity") {
       const owner = this.owner!;
       return { target: this.own!.state, endpointId: agentEndpointId(owner),
@@ -670,10 +683,21 @@ export class PeerRuntime {
         ok: false, error: { message: errorMessage(error) } }) + "\n");
     } finally { this.sockets.delete(socket); }
   }
-  private target(conversationId: string): Endpoint {
-    if (!uuid(conversationId)) throw new Error("Invalid target conversation ID");
-    const own = this.own!, candidates = this.runtime.store.all().filter(binding => isLive(binding, own.server)
-      && binding.taskId === own.state.taskId && binding.conversationId === conversationId);
+  private target(targetId: string, name?: string): Endpoint {
+    const own = this.own!;
+    if (name !== undefined) {
+      const named = this.runtime.names.resolve(name);
+      const candidates = this.runtime.store.all().filter(binding => isLive(binding, own.server)
+        && binding.conversationId === named.conversationId);
+      if (candidates.length !== 1) throw new Error("Named agent is not uniquely live: " + name);
+      const binding = this.runtime.store.find(named, own.server);
+      if (!binding || binding.name !== name || sameIdentity(binding, own.state))
+        throw new Error("Invalid, stale, or ambiguous named agent: " + name);
+      return endpointFromBinding(binding);
+    }
+    if (!uuid(targetId)) throw new Error("Invalid target conversation ID or generated agent name");
+    const candidates = this.runtime.store.all().filter(binding => isLive(binding, own.server)
+      && binding.taskId === own.state.taskId && binding.conversationId === targetId);
     if (candidates.length !== 1) throw new Error("Target conversation is not uniquely live in this related task");
     const binding = this.runtime.store.find(candidates[0], own.server);
     if (!binding || sameIdentity(binding, own.state)) throw new Error("Invalid or ambiguous peer target");
@@ -684,9 +708,11 @@ export class PeerRuntime {
       params: PeerReadInput | PeerSendInput | AgentHandle | PeerAgentControlInput | Record<string, never>, id: string,
       external?: AbortSignal): Promise<PeerResult> {
     this.guard();
-    const own = this.own!, from = this.owner!, to = this.target(targetId), generation = this.generation;
+    const name = op === "read" && !uuid(targetId) ? canonicalAgentName(targetId) : undefined;
+    const own = this.own!, from = this.owner!, to = this.target(targetId, name), generation = this.generation;
     const signal = AbortSignal.any([this.controller.signal, own.signal, AbortSignal.timeout(10_000), ...(external ? [external] : [])]);
-    const request: PeerRequest = { type: PROTOCOL, version: 1, id, op, from, to, params };
+    const request: PeerRequest = { type: PROTOCOL, version: 1, id, op, from, to,
+      ...(name === undefined ? {} : { name }), params };
     const body = JSON.stringify(request);
     if (Buffer.byteLength(body) > MAX_PEER_REQUEST_BYTES) throw new Error("Peer request exceeds 40 KiB");
     if (op === "send") {
@@ -745,8 +771,9 @@ export class PeerRuntime {
     }
   }
   async read(target: string, input: PeerReadInput, signal?: AbortSignal): Promise<PeerReadResult> {
+    const targetId = uuid(target) ? target : this.runtime.names.resolve(target).conversationId;
     const result = await this.request(target, "read", readInput(input), randomUUID(), signal);
-    return validatePeerReadResult(result, input, target);
+    return validatePeerReadResult(result, input, targetId);
   }
   async agentActivity(target: string, signal?: AbortSignal): Promise<PeerAgentActivityResult> {
     const result = await this.request(target, "agentActivity", {}, randomUUID(), signal) as PeerAgentActivityResult;
