@@ -339,7 +339,6 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       peer?.observeAgentEnd(ctx);
       // Local Pi settlement may schedule I/O, but this hook never awaits delivery or starts model work itself.
       agentRuntime.observeLocalSettlement(own.state);
-      if (localAgentHandle && agentRuntime.hasCompletion(localAgentHandle)) capability?.finish();
     } catch { /* stale or unverified contexts provide no settlement evidence */ }
   });
   pi.on("before_agent_start", (event) => {

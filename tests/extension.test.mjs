@@ -169,28 +169,30 @@ test("related agent bootstrap matches the child seed and retained handles stale 
   assert.equal((await status()).details.evidence, "retained");
 });
 
-test("mixed work keeps the grant active until agent_end, then later turns abort quietly", async t => {
+test("completion leaves the child available for follow-ups within its original grant", async t => {
   const parent = { taskId: uuid(), conversationId: uuid(), piSessionId: uuid(), role: "main" };
   const seed = { ...childBootstrap(parent, true, "chat", server), piSessionId: "factory-session" };
   const handle = agentHandleFromIdentity(seed, { runtimeId: uuid(), runId: uuid(), requestId: "launch-complete",
     messageId: uuid(), endpointGeneration: 1 });
-  const grant = enforcementGrant({ tools: ["rexpi_agent_complete"], turns: 2, timeoutMs: 10_000 });
+  const grant = enforcementGrant({ tools: ["read", "rexpi_agent_complete"], turns: 2, timeoutMs: 10_000 });
   const f = fixture(t, { PI_REX_BOOTSTRAP: encodeBootstrap(seed), PI_REX_AGENT_HANDLE: encodeAgentBootstrap(handle),
     PI_REX_CAPABILITY_GRANT: encodeCapabilityGrant(grant) });
   await f.events.get("session_start")({}, f.ctx);
   let aborts = 0;
   const turnCtx = { ...f.ctx, abort: () => { aborts++; } };
   f.events.get("turn_start")({}, turnCtx);
-  assert.equal(aborts, 0);
   const completed = await f.tools.get("rexpi_agent_complete").execute("complete",
     { outcome: "completed", summary: "done" }, undefined, undefined, f.ctx);
   assert.equal(completed.terminate, true);
-  f.events.get("turn_start")({}, turnCtx);
-  assert.equal(aborts, 0, "recording a result does not prematurely complete the capability during mixed work");
+  assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx), undefined,
+    "completion terminates the current tool batch without revoking the incarnation");
   f.events.get("agent_end")({}, f.ctx);
   f.events.get("turn_start")({}, turnCtx);
-  assert.equal(aborts, 1, "the real run-end transition enforces later turn denial through ctx.abort");
-  assert.equal(f.notices.filter(([message]) => /denied turn|grant expired/.test(message)).length, 0);
+  assert.equal(aborts, 0, "a typed or parent-delivered follow-up can start after assignment completion");
+  assert.equal(f.events.get("tool_call")({ toolName: "read", input: {} }, f.ctx), undefined);
+  f.events.get("turn_start")({}, turnCtx);
+  assert.equal(aborts, 1, "follow-ups still consume the original turn budget");
+  assert.match(f.notices.at(-1)[0], /denied turn 3/);
 });
 
 test("malformed settlement bootstrap is consumed and rejected with the agent handle", async t => {

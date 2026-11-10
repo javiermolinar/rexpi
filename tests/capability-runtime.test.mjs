@@ -182,22 +182,6 @@ test("one unref'd consumption timer aborts current work and denies future turns 
   assert.deepEqual(notices, ["Capability grant expired; aborted current work and denied future turns"]);
 });
 
-test("run-end completion clears the deadline quietly and aborts any later turn without a warning", t => {
-  const { capability, clock, notices } = runtime(t, grant({ timeoutMs: 100 }));
-  const ctx = context();
-  assert.equal(capability.startTurn(ctx), true);
-  capability.finish(); capability.finish();
-  assert.equal(clock.timers.size, 0);
-  assert.equal(capability.signal.aborted, false);
-  clock.advance(5000);
-  assert.equal(ctx.aborts, 0);
-  assert.deepEqual(notices, []);
-  assert.equal(capability.startTurn(ctx), false);
-  assert.equal(ctx.aborts, 1, "the completed turn boundary enforces denial through Pi's abort hook");
-  assert.deepEqual(notices, []);
-  assert.match(capability.guardTool("read", {}).reason, /already completed/);
-});
-
 test("tool and turn boundaries expire even when the timer callback is delayed", t => {
   const { capability, clock } = runtime(t, grant({ turns: 2, timeoutMs: 100 }));
   const ctx = context();

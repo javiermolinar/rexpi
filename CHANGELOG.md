@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep delegated child conversations interactive after explicit completion. Parent-delivered and typed follow-ups now run under the original capability turn and timeout limits instead of aborting at the next turn boundary.
 - Assign persistent Rex/Zellij-style names to Pi conversations, display them in a responsive colored above-editor widget and as primary agent-panel labels, and retain aliases across reloads without reuse. Child widgets show `parent-name > child-name` using retained relationship evidence.
 - Allow `rexpi_read_conversation` to resolve generated names for read-only history snapshots across independent local tasks. Related UUID reads and all messaging/control restrictions remain unchanged.
 
