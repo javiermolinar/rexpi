@@ -85,7 +85,9 @@ function fixture(options = {}) {
     closes: 0,
     closeRequests: [],
     disconnectListeners: new Set(),
+    probeCalls: [],
     onConnect: undefined,
+    onProbe: undefined,
     async connect(request, signal) {
       signal?.throwIfAborted();
       this.requests.push(request);
@@ -94,6 +96,10 @@ function fixture(options = {}) {
     },
     async close(binding) { this.closeRequests.push(binding); },
     async closeAll() { this.closes++; },
+    async probe(ticket, signal) {
+      this.probeCalls.push({ ticket, signal });
+      return this.onProbe ? this.onProbe(ticket, signal) : true;
+    },
     onDisconnect(_ticket, listener) {
       this.disconnectListeners.add(listener);
       return () => this.disconnectListeners.delete(listener);
@@ -104,9 +110,18 @@ function fixture(options = {}) {
     settings: options.settings === undefined ? settings() : options.settings,
     entries: options.entries ?? persisted.map(data => ({ type: "custom", customType: HOST_SELECTION_ENTRY, data })),
     persist(intent) { persisted.push(intent); },
+    ...(options.healthCheck ? { healthCheck: options.healthCheck } : {}),
   });
   return { runtime, registry, transport, selection, persisted, host };
 }
+async function until(predicate, message = "condition was not met") {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.fail(message);
+}
+
 function remoteIntent(piSessionId = "conversation-one") {
   return {
     version: 1, piSessionId, kind: "remote", alias: "debian", configuredHostId: CONFIGURED_ID,
@@ -186,7 +201,8 @@ test("two conversations have isolated selections, intents, and tunnels", async (
 test("owned disconnects revoke verified status and host switches close prior tunnels", async () => {
   const f = fixture();
   await f.selection.connect("debian");
-  assert.equal(f.selection.snapshot().monitoring, "process");
+  assert.equal(f.selection.snapshot().monitoring, "process+health");
+  assert.ok(Number.isFinite(Date.parse(f.selection.snapshot().lastVerifiedAt)));
   f.transport.disconnect();
   assert.equal(f.selection.snapshot().state, "disconnected");
   assert.equal(f.selection.snapshot().reconnectRequired, true);
@@ -200,13 +216,81 @@ test("owned disconnects revoke verified status and host switches close prior tun
   assert.equal(f.transport.disconnectListeners.size, 0);
 });
 
-test("external selections report point-in-time verification rather than process monitoring", async () => {
+test("external selections use health monitoring without process ownership", async () => {
   const f = fixture();
   f.transport.onConnect = async request => ({ ...ticket(request), ownership: "external" });
   await f.selection.connect("debian");
-  assert.equal(f.selection.snapshot().monitoring, "external");
-  assert.equal(f.runtime.statuses.at(-1), "debian last-verified");
+  assert.equal(f.selection.snapshot().monitoring, "health");
+  assert.equal(f.runtime.statuses.at(-1), "debian verified");
   assert.equal(f.transport.disconnectListeners.size, 0);
+});
+
+test("health polling tolerates transient failures and revokes only after consecutive failures", async () => {
+  const f = fixture({ healthCheck: { intervalMs: 1, failureThreshold: 2 } });
+  f.transport.onConnect = async request => ({ ...ticket(request), ownership: "external" });
+  const probes = [];
+  f.transport.onProbe = () => new Promise(resolve => probes.push(resolve));
+  const selected = await f.selection.connect("debian");
+  const initiallyVerified = selected.lastVerifiedAt;
+  await until(() => probes.length === 1);
+  probes[0](false);
+  await until(() => probes.length === 2);
+  assert.equal(f.selection.snapshot().state, "verified", "one transient failure does not revoke");
+  probes[1](true);
+  await until(() => probes.length === 3);
+  assert.equal(f.selection.snapshot().state, "verified");
+  assert.ok(Date.parse(f.selection.snapshot().lastVerifiedAt) >= Date.parse(initiallyVerified));
+  probes[2](false);
+  await until(() => probes.length === 4);
+  assert.equal(f.selection.snapshot().state, "verified", "a successful probe resets the failure count");
+  probes[3](false);
+  await until(() => f.selection.snapshot().state === "disconnected");
+  assert.equal(f.transport.probeCalls.length, 4);
+  assert.equal(f.selection.snapshot().reconnectRequired, true);
+  assert.equal(f.selection.snapshot().lastVerifiedAt, undefined);
+  assert.equal(f.transport.requests.length, 1, "health failures never establish a replacement tunnel");
+  const calls = f.transport.probeCalls.length;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.transport.probeCalls.length, calls, "disconnected selections stop polling until explicit reconnect");
+  await f.selection.stop();
+});
+
+test("host switches and teardown cancel in-flight health checks without stale revocation", async () => {
+  const f = fixture({ healthCheck: { intervalMs: 1, failureThreshold: 1 } });
+  let finish;
+  const started = new Promise(resolve => { f.transport.onProbe = (_ticket, signal) => {
+    resolve(signal);
+    return new Promise(done => { finish = done; });
+  }; });
+  await f.selection.connect("debian");
+  const probeSignal = await started;
+  await f.selection.connect("local");
+  assert.equal(probeSignal.aborted, true);
+  finish(false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.selection.snapshot().kind, "local");
+  const calls = f.transport.probeCalls.length;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.transport.probeCalls.length, calls);
+  await f.selection.stop();
+});
+
+test("stop aborts a pending health check and fences its late result", async () => {
+  const f = fixture({ healthCheck: { intervalMs: 1, failureThreshold: 1 } });
+  let finish;
+  const started = new Promise(resolve => { f.transport.onProbe = (_ticket, signal) => {
+    resolve(signal);
+    return new Promise(done => { finish = done; });
+  }; });
+  await f.selection.connect("debian");
+  const probeSignal = await started;
+  const stopped = f.selection.stop();
+  assert.equal(probeSignal.aborted, true);
+  finish(false);
+  await stopped;
+  assert.equal(f.transport.closes, 1);
+  assert.equal(f.runtime.statuses.at(-1), "debian verified", "stop does not publish a late health transition");
+  await assert.rejects(Promise.resolve().then(() => f.selection.snapshot()), /no longer active|aborted/);
 });
 
 test("resume and tree restoration are disconnected and never probe or reconnect; forks exclude intent", () => {

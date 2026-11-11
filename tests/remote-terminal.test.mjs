@@ -52,6 +52,7 @@ async function fixture(t, options = {}) {
     },
     async close(binding) { this.closeRequests.push(binding); },
     async closeAll() {},
+    async probe() { return true; },
     onDisconnect(_ticket, listener) {
       this.disconnectListeners.add(listener);
       return () => this.disconnectListeners.delete(listener);

@@ -353,6 +353,7 @@ export class SshUnixSocketTransport {
   private readonly limits: SshTransportSettings;
   private readonly env: Readonly<Record<string, string>>;
   private readonly hosts = new Map<string, HostEntry>();
+  private readonly ticketRequests = new WeakMap<SshConnectionTicket, SshTransportRequest>();
   private readonly ticketOwners = new WeakMap<SshConnectionTicket, OwnedTunnel>();
 
   constructor(options: SshTransportOptions) {
@@ -442,6 +443,7 @@ export class SshUnixSocketTransport {
       hostId: req.hostId, hostAlias: req.hostAlias, endpoint: req.localSocketPath,
       ownership: owned ? "rexpi" as const : "external" as const,
     });
+    this.ticketRequests.set(ticket, req);
     if (owned) this.ticketOwners.set(ticket, owned);
     return ticket;
   }
@@ -956,10 +958,35 @@ export class SshUnixSocketTransport {
     }
   }
 
-  /** Subscribes only Rexpi-owned process lifecycle; external tunnels have no process handle to monitor. */
+  /**
+   * Rechecks the exact ticket without connecting or replacing its tunnel. Operational failure is
+   * unhealthy rather than exceptional; cancellation remains exceptional. External tickets verify
+   * the current endpoint, while owned tickets must still reference the same process and socket.
+   */
+  async probe(ticket: SshConnectionTicket, signal?: AbortSignal): Promise<boolean> {
+    const req = this.ticketRequests.get(ticket);
+    if (!req) throw failure("invalid_request", "Unknown SSH connection ticket");
+    if (signal?.aborted) throw cancelled();
+    const owned = this.ticketOwners.get(ticket);
+    if (ticket.ownership === "rexpi" && !owned) return false;
+    if (owned && (owned.exited || owned.retired || this.hosts.get(req.hostId)?.active !== owned)) return false;
+    try {
+      if (owned) {
+        const inspected = await this.inspect(req, this.limits.inspectionTimeoutMs, signal);
+        if (inspected.kind !== "socket" || inspected.identity !== owned.socketIdentity) return false;
+      }
+      if (!await this.healthy(req, this.limits.probeTimeoutMs, signal)) return false;
+      return !owned || (!owned.exited && !owned.retired && this.hosts.get(req.hostId)?.active === owned);
+    } catch (error) {
+      if (signal?.aborted || (error instanceof SshTransportError && error.code === "cancelled")) throw cancelled();
+      return false;
+    }
+  }
+
+  /** Subscribes only Rexpi-owned process lifecycle; external tunnels use probe() for health monitoring. */
   onDisconnect(ticket: SshConnectionTicket, listener: () => void): () => void {
     const owned = this.ticketOwners.get(ticket);
-    if (!owned) return () => { /* External tunnels are point-in-time verification only. */ };
+    if (!owned) return () => { /* External tunnels have no process handle to monitor. */ };
     owned.disconnectListeners.add(listener);
     if (owned.exited || owned.retired) queueMicrotask(listener);
     return () => { owned.disconnectListeners.delete(listener); };

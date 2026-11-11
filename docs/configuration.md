@@ -238,6 +238,8 @@ Use the host's actual SSH alias, remote Rex socket, and the `host_id` and `insta
 
 Ask Pi to list hosts, connect to one, or open a terminal there. `rexpi_connect_host` changes only the current conversation's default execution host; `rexpi_open_terminal` also accepts a one-off `host` without changing that selection. Remote cwd, executables, and PATH resolve on the remote machine. Other launches, configured commands, agents, and messaging remain local. Restored remote selections require an explicit reconnect.
 
+The selected remote host is checked every 30 seconds with the same bounded `whoami` identity probe used during connection. This covers both Rexpi-owned and external SSH tunnels. Three consecutive failures mark the host disconnected and stop polling; a successful check resets the failure count. `rexpi_inspect` exposes `lastVerifiedAt` while the selection is verified. Health checks never spawn or replace a tunnel, and recovery still requires an explicit `rexpi_connect_host`. No remote operation is replayed after reconnection.
+
 ## Helix and Hunk, floating
 
 Merge this into `~/.pi/agent/settings.json`. The settings key is still `pi-rex` for compatibility with existing configurations:

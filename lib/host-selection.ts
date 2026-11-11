@@ -148,7 +148,8 @@ export interface RemoteExecutionHost extends CommonExecutionHost {
   readonly expectedServerHostId: string;
   readonly expectedServerInstanceId: string;
   readonly reconnectRequired: boolean;
-  readonly monitoring?: "process" | "external";
+  readonly monitoring?: "process+health" | "health";
+  readonly lastVerifiedAt?: string;
   readonly ticket?: HostTicketSnapshot;
 }
 export type ExecutionHostSnapshot = LocalExecutionHost | RemoteExecutionHost;
@@ -205,12 +206,23 @@ export interface HostSelectionTransport {
     operation: (ticket: SshConnectionTicket, signal: AbortSignal) => T | Promise<T>, signal?: AbortSignal): Promise<T>;
   close(binding: Pick<SshTransportRequest, "hostId" | "hostAlias">, signal?: AbortSignal): Promise<void>;
   closeAll(signal?: AbortSignal): Promise<void>;
+  probe(ticket: SshConnectionTicket, signal?: AbortSignal): Promise<boolean>;
   onDisconnect(ticket: SshConnectionTicket, listener: () => void): () => void;
 }
+export interface HostHealthCheckSettings {
+  readonly intervalMs: number;
+  readonly failureThreshold: number;
+}
+export const DEFAULT_HOST_HEALTH_CHECK_SETTINGS: Readonly<HostHealthCheckSettings> = Object.freeze({
+  intervalMs: 30_000,
+  failureThreshold: 3,
+});
 export interface HostSelectionOptions {
   readonly settings?: unknown;
   readonly entries?: readonly unknown[];
   readonly persist: (intent: HostSelectionIntent) => void;
+  /** Test/runtime timing boundary; connection settings remain strict and unchanged. */
+  readonly healthCheck?: HostHealthCheckSettings;
 }
 export interface RemoteOperationHost {
   readonly kind: "remote";
@@ -226,6 +238,17 @@ export interface RemoteHostOperationContext {
   readonly localOrigin: { readonly blockId: string; readonly serverHostId: string; readonly serverInstanceId: string };
   /** Rechecks conversation, selection generation, and cancellation immediately before mutation. */
   readonly check: () => void;
+}
+
+function healthCheckSettings(value?: HostHealthCheckSettings): Readonly<HostHealthCheckSettings> {
+  if (value === undefined) return DEFAULT_HOST_HEALTH_CHECK_SETTINGS;
+  const root = object(value, "host health-check settings");
+  exactKeys(root, ["intervalMs", "failureThreshold"], "host health-check setting");
+  if (!Number.isInteger(root.intervalMs) || (root.intervalMs as number) < 1 || (root.intervalMs as number) > 300_000)
+    return failure("Invalid host health-check interval");
+  if (!Number.isInteger(root.failureThreshold) || (root.failureThreshold as number) < 1
+      || (root.failureThreshold as number) > 10) return failure("Invalid host health-check failure threshold");
+  return Object.freeze({ intervalMs: root.intervalMs as number, failureThreshold: root.failureThreshold as number });
 }
 
 function localSelection(snapshot: Snapshot): LocalExecutionHost {
@@ -274,6 +297,7 @@ export class HostSelection {
   private readonly registry: HostSelectionRegistry;
   private readonly transport: HostSelectionTransport;
   private readonly settings: HostSettings;
+  private readonly healthCheck: Readonly<HostHealthCheckSettings>;
   private readonly persist: (intent: HostSelectionIntent) => void;
   private readonly piSessionId: string;
   private readonly lifecycle = new AbortController();
@@ -281,6 +305,9 @@ export class HostSelection {
   private selected: ExecutionHostSnapshot;
   private stopped = false;
   private removeDisconnectListener?: () => void;
+  private healthMonitor?: AbortController;
+  private lastVerifiedAt?: string;
+  private verifiedSnapshot?: RemoteExecutionHost;
   private cleanupPromise?: Promise<void>;
 
   constructor(runtime: HostSelectionRuntime, registry: HostSelectionRegistry,
@@ -290,6 +317,7 @@ export class HostSelection {
     this.registry = registry;
     this.transport = transport;
     this.settings = parseHostSettings(options.settings);
+    this.healthCheck = healthCheckSettings(options.healthCheck);
     this.persist = options.persist;
     const own = runtime.snapshot();
     this.piSessionId = own.state.piSessionId;
@@ -303,7 +331,9 @@ export class HostSelection {
     this.lifecycle.signal.throwIfAborted();
     if (this.stopped) return failure("Host selection is no longer active");
     this.runtime.snapshot();
-    return this.selected;
+    return this.selected.kind === "remote" && this.selected.state === "verified"
+      ? this.verifiedSnapshot ?? this.selected
+      : this.selected;
   }
 
   /** A one-off configured-host lookup; it neither discovers nor changes selection. */
@@ -400,19 +430,61 @@ export class HostSelection {
   private stopWatching(): void {
     this.removeDisconnectListener?.();
     this.removeDisconnectListener = undefined;
+    this.healthMonitor?.abort();
+    this.healthMonitor = undefined;
+  }
+  private revokeRemote(snapshot: HostTicketSnapshot, generation: number): void {
+    const current = this.selected;
+    if (this.stopped || generation !== this.generation || current.kind !== "remote" || current.ticket !== snapshot) return;
+    this.selected = restoredSelection({
+      version: 1, piSessionId: this.piSessionId,
+      kind: "remote", alias: current.alias, configuredHostId: current.configuredHostId,
+      expectedServerHostId: current.expectedServerHostId, expectedServerInstanceId: current.expectedServerInstanceId,
+    });
+    this.lastVerifiedAt = undefined;
+    this.verifiedSnapshot = undefined;
+    this.stopWatching();
+    this.publishStatus();
   }
   private watch(ticket: SshConnectionTicket, snapshot: HostTicketSnapshot, generation: number): void {
     this.stopWatching();
-    if (ticket.ownership !== "rexpi") return;
-    this.removeDisconnectListener = this.transport.onDisconnect(ticket, () => {
+    const monitor = new AbortController();
+    this.healthMonitor = monitor;
+    if (ticket.ownership === "rexpi")
+      this.removeDisconnectListener = this.transport.onDisconnect(ticket, () => this.revokeRemote(snapshot, generation));
+    void this.monitorHealth(ticket, snapshot, generation, monitor.signal);
+  }
+  private async monitorHealth(ticket: SshConnectionTicket, snapshot: HostTicketSnapshot,
+      generation: number, signal: AbortSignal): Promise<void> {
+    let failures = 0;
+    while (!signal.aborted) {
+      if (!await this.waitForHealthCheck(signal)) return;
+      let healthy = false;
+      try { healthy = await this.transport.probe(ticket, signal); }
+      catch { /* Cancellation and operational failure both finish below; stale generations are fenced. */ }
+      if (signal.aborted || this.stopped || generation !== this.generation) return;
       const current = this.selected;
-      if (this.stopped || generation !== this.generation || current.kind !== "remote" || current.ticket !== snapshot) return;
-      this.selected = restoredSelection({
-        version: 1, piSessionId: this.piSessionId,
-        kind: "remote", alias: current.alias, configuredHostId: current.configuredHostId,
-        expectedServerHostId: current.expectedServerHostId, expectedServerInstanceId: current.expectedServerInstanceId,
-      });
-      this.publishStatus();
+      if (current.kind !== "remote" || current.ticket !== snapshot) return;
+      if (healthy) {
+        failures = 0;
+        this.lastVerifiedAt = new Date().toISOString();
+        this.verifiedSnapshot = Object.freeze({ ...current, lastVerifiedAt: this.lastVerifiedAt });
+        continue;
+      }
+      failures++;
+      if (failures >= this.healthCheck.failureThreshold) {
+        this.revokeRemote(snapshot, generation);
+        return;
+      }
+    }
+  }
+  private waitForHealthCheck(signal: AbortSignal): Promise<boolean> {
+    return new Promise(resolve => {
+      const timer = setTimeout(done, this.healthCheck.intervalMs);
+      timer.unref();
+      const onAbort = (): void => { clearTimeout(timer); resolve(false); };
+      function done(): void { signal.removeEventListener("abort", onAbort); resolve(true); }
+      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
   private async discardUnlessSelected(ticket: SshConnectionTicket): Promise<void> {
@@ -431,8 +503,7 @@ export class HostSelection {
   private publishStatus(): void {
     const selected = this.selected;
     this.runtime.setHostStatus(selected.kind === "local" ? "local"
-      : selected.alias + (selected.state === "disconnected" ? " disconnected/reconnect-required"
-        : selected.monitoring === "external" ? " last-verified" : " verified"));
+      : selected.alias + (selected.state === "disconnected" ? " disconnected/reconnect-required" : " verified"));
   }
 
   /** Read-only, on-demand discovery. The default omits every candidate source. */
@@ -450,6 +521,8 @@ export class HostSelection {
     this.check(own, generation, signal);
     const previous = this.selected;
     const selected = localSelection(own);
+    this.lastVerifiedAt = undefined;
+    this.verifiedSnapshot = undefined;
     // No process, socket, health check, or local-Rex fallback is needed: Runtime already verified it.
     this.persist(Object.freeze({ version: 1, piSessionId: own.state.piSessionId, kind: "local" }));
     this.stopWatching();
@@ -516,16 +589,18 @@ export class HostSelection {
       expectedServerHostId: connection.expectedServerHostId,
       expectedServerInstanceId: connection.expectedServerInstanceId,
       reconnectRequired: false,
-      monitoring: ticket.ownership === "rexpi" ? "process" : "external",
+      monitoring: ticket.ownership === "rexpi" ? "process+health" : "health",
       ticket: ticketSnapshot(ticket),
     });
     // The freshness check above immediately precedes persistence and this same-turn publication.
     this.persist(intent);
     this.selected = selected;
+    this.lastVerifiedAt = new Date().toISOString();
+    this.verifiedSnapshot = Object.freeze({ ...selected, lastVerifiedAt: this.lastVerifiedAt });
     this.publishStatus();
     this.watch(ticket, selected.ticket!, generation);
     await this.retirePrevious(previous, selected);
-    return selected;
+    return this.snapshot();
   }
 
   /** Idempotent bounded cleanup; lifecycle owners must await it before process exit or replacement. */

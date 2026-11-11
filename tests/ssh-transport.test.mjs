@@ -206,6 +206,41 @@ test("healthy external sockets are probed and borrowed without adoption or clean
   assert.equal(h.sockets.get(REQUEST.localSocketPath), "external-1");
 });
 
+test("point-in-time health probes never connect, adopt, spawn, or retry", async () => {
+  let healthy = true;
+  const h = makeHarness({
+    sockets: { [REQUEST.localSocketPath]: "external-1" },
+    probe: async () => healthy,
+  });
+  const ticket = await h.transport.connect(REQUEST);
+  assert.equal(await h.transport.probe(ticket), true);
+  healthy = false;
+  assert.equal(await h.transport.probe(ticket), false);
+  assert.equal(h.probeCalls.length, 3, "initial verification plus two explicit health checks");
+  assert.equal(h.spawnCalls.length, 0);
+
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(h.transport.probe(ticket, controller.signal),
+    transportError(error => error.code === "cancelled"));
+  assert.equal(h.probeCalls.length, 3, "an already cancelled probe performs no I/O");
+});
+
+test("owned health probes require the same live process and socket identity", async () => {
+  const h = makeHarness();
+  const ticket = await h.transport.connect(REQUEST);
+  const identity = h.sockets.get(REQUEST.localSocketPath);
+  assert.equal(await h.transport.probe(ticket), true);
+  h.sockets.set(REQUEST.localSocketPath, "external-replacement");
+  assert.equal(await h.transport.probe(ticket), false);
+  h.sockets.set(REQUEST.localSocketPath, identity);
+  assert.equal(await h.transport.probe(ticket), true);
+  h.processes[0].exit(1);
+  assert.equal(await h.transport.probe(ticket), false);
+  assert.equal(h.spawnCalls.length, 1, "a failed health check never starts a replacement tunnel");
+  await h.transport.close(REQUEST);
+});
+
 test("owned startup uses literal bounded OpenSSH argv, reuses health, and cleans only its socket", async () => {
   const h = makeHarness();
   const ticket = await h.transport.connect(REQUEST);

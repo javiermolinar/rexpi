@@ -139,11 +139,12 @@ Remote Rex owns remote terminal and Pi processes, so SSH tunnel closure alone do
 | Event | Required interpretation |
 |---|---|
 | Local controller death | Local messaging/binding endpoint is gone; owned tunnels clean up or undergo bounded identity-checked recovery. Remote Rex workloads survive; no controller is transparently replaced. |
-| Owned tunnel death | Revoke verified selection immediately and require explicit reconnect. Borrowed tunnels remain `external`/last-verified, not continuously monitored. In-flight post-dispatch creation is unknown. |
+| Owned tunnel death | Revoke verified selection immediately and require explicit reconnect. In-flight post-dispatch creation is unknown. |
+| Owned or borrowed tunnel health failure | Probe the exact ticket and remote `whoami` identity every 30 seconds without reconnecting. Three consecutive failures revoke verified selection and stop polling; success refreshes `lastVerifiedAt` and resets the failure count. Borrowed tunnels remain unowned and are never killed or unlinked. |
 | Debian/local Rex server restart | `instance_id` changes invalidate prior server and anchor evidence even if `host_id` is stable. Reverify exact identity; do not assume Rex-owned processes survived or reuse old resource IDs. A fixed expected instance ID fails until deliberately reconfigured. |
 | Pi process replacement | Old PID/token/endpoint generation and message authority are stale. A surviving block is not the same conversation; do not adopt, retarget, or replay to the replacement. |
 
-Every new operation reverifies exact server identity. There is no automatic reconnect, uncertain creation retry, remote cleanup guess, or message replay. Explicit reconnect authorizes a new connection, not repetition of earlier mutations.
+Every new operation reverifies exact server identity. Background health polling only revokes stale verification; it never establishes a replacement tunnel. There is no automatic reconnect, uncertain creation retry, remote cleanup guess, or message replay. Explicit reconnect authorizes a new connection, not repetition of earlier mutations.
 
 ## 7. Related agents and messaging boundary
 
