@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
+- Add policy-aware model routing for delegated and fan-out launches, with deep, everyday, and fast example variants, exact physical and native model selection, opt-in bounded automatic selectors, current-policy revalidation, per-child routing receipts, and fail-closed behavior without changing parent models or capability grants.
+- Consolidate model-routing, layout, remote-terminal, custom-command, and default configuration guidance in `docs/configuration.md`.
 - Keep delegated child conversations interactive after explicit completion. Parent-delivered and typed follow-ups now run under the original capability turn and timeout limits instead of aborting at the next turn boundary.
 - Assign persistent Rex/Zellij-style names to Pi conversations, display them in a responsive colored above-editor widget and as primary agent-panel labels, and retain aliases across reloads without reuse. Child widgets show `parent-name > child-name` using retained relationship evidence.
 - Allow `rexpi_read_conversation` to resolve generated names for read-only history snapshots across independent local tasks. Related UUID reads and all messaging/control restrictions remain unchanged.
