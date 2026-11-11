@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- Add 30-second health polling for selected remote Rex hosts, covering Rexpi-owned and external SSH tunnels with exact server identity checks, consecutive-failure thresholds, disconnected status, and `lastVerifiedAt` inspection evidence. Health checks never reconnect automatically or replay remote operations.
+- Simplify agent control-response parsing and optional shortcut registration while preserving existing lifecycle and failure semantics.
+
 ## 0.5.0
 
 - Add policy-aware model routing for delegated and fan-out launches, with deep, everyday, and fast example variants, exact physical and native model selection, opt-in bounded automatic selectors, current-policy revalidation, per-child routing receipts, and fail-closed behavior without changing parent models or capability grants.
