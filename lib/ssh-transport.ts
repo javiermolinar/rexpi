@@ -522,6 +522,23 @@ export class SshUnixSocketTransport {
       () => failure("cleanup_failed", "Tunnel journal removal failed", "cleanup"));
   }
 
+  private trackOwnedProcess(entry: HostEntry, request: SshTransportRequest, process: SshProcess,
+      state: Pick<OwnedTunnel, "published" | "staging" | "stagingIdentity" | "journal" | "socketIdentity">): OwnedTunnel {
+    let finishExit!: () => void;
+    const exitPromise = new Promise<void>(resolve => { finishExit = resolve; });
+    const owned: OwnedTunnel = {
+      request, process, exitPromise, finishExit, disconnectListeners: new Set(),
+      exited: false, exitCode: null, exitSignal: null, retired: false, ...state,
+    };
+    entry.active = owned;
+    owned.removeExitListener = process.onExit((code, exitSignal) => {
+      if (owned.exited) return;
+      owned.exited = true; owned.exitCode = code; owned.exitSignal = exitSignal;
+      owned.finishExit(); this.notifyDisconnect(owned);
+    });
+    return owned;
+  }
+
   private async recoverOwned(entry: HostEntry, req: SshTransportRequest,
       signal: AbortSignal): Promise<SshConnectionTicket | undefined> {
     if (!this.journal) return undefined;
@@ -559,21 +576,10 @@ export class SshUnixSocketTransport {
       return undefined;
     }
     const child = this.attachProcess!(record.ssh.pid, record.ssh.startToken);
-    let finishExit!: () => void;
-    const exitPromise = new Promise<void>(resolve => { finishExit = resolve; });
-    const owned: OwnedTunnel = {
-      request: req, process: child, exitPromise, finishExit, disconnectListeners: new Set(),
-      exited: false, exitCode: null, exitSignal: null,
+    const owned = this.trackOwnedProcess(entry, req, child, {
       staging: record.staging, stagingIdentity: record.stagingIdentity, journal: record,
-      published: true, socketIdentity: expectedPublic, retired: false,
-    };
-    entry.active = owned;
-    const onExit = (code: number | null, exitSignal: NodeJS.Signals | null): void => {
-      if (owned.exited) return;
-      owned.exited = true; owned.exitCode = code; owned.exitSignal = exitSignal;
-      owned.finishExit(); this.notifyDisconnect(owned);
-    };
-    owned.removeExitListener = child.onExit(onExit);
+      published: true, socketIdentity: expectedPublic,
+    });
     if (identitiesMatch && await this.healthy(req, this.limits.probeTimeoutMs, signal) && !owned.exited)
       return this.ticket(req, owned);
     await this.retireOwned(entry, owned);
@@ -728,24 +734,9 @@ export class SshUnixSocketTransport {
         throw error;
       }
     }
-    let finishExit!: () => void;
-    const exitPromise = new Promise<void>(resolve => { finishExit = resolve; });
-    const owned: OwnedTunnel = {
-      request: req, process: child, exitPromise, finishExit, disconnectListeners: new Set(),
-      exited: false, exitCode: null, exitSignal: null, staging, published: false, retired: false,
-      journal: journalRecord,
-    };
-    entry.active = owned;
-    const onExit = (code: number | null, exitSignal: NodeJS.Signals | null): void => {
-      if (owned.exited) return;
-      owned.exited = true;
-      owned.exitCode = code;
-      owned.exitSignal = exitSignal;
-      owned.finishExit();
-      this.notifyDisconnect(owned);
-    };
+    let owned: OwnedTunnel;
     try {
-      owned.removeExitListener = child.onExit(onExit);
+      owned = this.trackOwnedProcess(entry, req, child, { staging, published: false, journal: journalRecord });
     } catch {
       entry.active = undefined;
       try { await child.kill("SIGTERM"); } catch { /* The process handle is already unusable. */ }

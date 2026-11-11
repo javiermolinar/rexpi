@@ -59,7 +59,7 @@ test("busy, idle with queued input, and settlement stay independent from pending
 test("per-run retention, page bounds, and foreign/stale/evicted cursors fail closed", async () => {
   const agent = handle(), other = handle(), reader = readerFor(agent);
   const runtime = new AgentRuntime(reader, { maxEventsPerRun: 4, maxPageSize: 2 });
-  runtime.track(agent); runtime.track(other);
+  runtime.register(agent); runtime.register(other);
   await runtime.status(agent);
   const first = runtime.events(agent, { limit: 2 });
   assert.equal(first.events.length, 2); assert.ok(first.next);

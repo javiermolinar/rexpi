@@ -1,4 +1,5 @@
-import { isPeerAgentCancelUnknownError, isPeerAgentResultEvidenceError, isPeerSendUnknownError, peerAgentNotificationId,
+import { isPeerAgentCancelUnknownError, isPeerAgentResultEvidenceError, isPeerSendUnknownError,
+  parsePeerAgentControlResponse, peerAgentNotificationId,
   type PeerAgentActivityResult, type PeerAgentCancelLocalResult, type PeerAgentCancelProvider,
   type PeerAgentCancelReason, type PeerAgentCancelResult, type PeerAgentNotification, type PeerAgentResultProvider,
   type PeerAgentResultResult, type PeerAgentStopLocalResult, type PeerAgentStopProvider,
@@ -386,9 +387,6 @@ export class AgentRuntime {
     this.append(current, "run.registered", { type: "run.registered" });
     return handle;
   }
-
-  /** Alias for explicit test/future-launch tracking; it does not discover or create runs. */
-  track(value: unknown, options: AgentRegistrationOptions = {}): AgentHandle { return this.register(value, options); }
 
   private exact(value: unknown): RunRecord {
     const handle = parseAgentHandle(value), current = this.runs.get(key(handle));
@@ -860,26 +858,13 @@ export class AgentRuntime {
         || current.handle.endpointGeneration < generation)
       return this.finishCancellation(current, "unknown", "changed", "Agent cancellation authority changed during the request");
     try {
-      const input = record(response), optionalError = Object.hasOwn(input, "error");
-      const fields = ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])];
-      if (Object.keys(input).length !== fields.length || fields.some(field => !Object.hasOwn(input, field)))
-        throw new Error("Unexpected or missing agent cancel response fields");
-      const target = parseIdentity(input.target);
-      if (!sameAgentConversation(current.handle, target)) throw new Error("Mismatched agent cancel target evidence");
-      assertSameAgentRun(input.handle, current.handle);
-      const incarnation = endpointId(input.endpointId);
-      if (!this.acceptIncarnation(current, incarnation)) throw new Error("Agent endpoint replacement makes cancellation unknown");
-      const acknowledged = input.state === "acknowledged" && input.reason === "busy";
-      const settled = input.state === "settled"
-        && ["idle", "already-settled", "no-active-work"].includes(String(input.reason));
-      const unknown = input.state === "unknown" && input.reason === "abort-throw";
-      if (!acknowledged && !settled && !unknown) throw new Error("Invalid agent cancel outcome");
-      if (optionalError && (typeof input.error !== "string" || !input.error.length || input.error.length > 1024))
-        throw new Error("Invalid agent cancel error evidence");
-      if (acknowledged) return this.finishCancellation(current, "acknowledged", "busy");
-      if (settled) return this.finishCancellation(current, "settled", input.reason as PeerAgentCancelReason);
+      const input = parsePeerAgentControlResponse(response, current.handle, "cancel");
+      if (!this.acceptIncarnation(current, input.endpointId))
+        throw new Error("Agent endpoint replacement makes cancellation unknown");
+      if (input.state === "acknowledged") return this.finishCancellation(current, "acknowledged", "busy");
+      if (input.state === "settled") return this.finishCancellation(current, "settled", input.reason);
       return this.finishCancellation(current, "unknown", "abort-throw",
-        optionalError ? input.error as string : "Pi abort threw; its outcome is unknown");
+        input.error ?? "Pi abort threw; its outcome is unknown");
     } catch (error) {
       // Validation failure after a request cannot prove that no abort occurred.
       return this.finishCancellation(current, "unknown", "changed", errorText(error));
@@ -964,27 +949,14 @@ export class AgentRuntime {
         || current.handle.endpointGeneration < generation)
       return this.finishStop(current, "unknown", "changed", "Agent stop authority changed during the request");
     try {
-      const input = record(response), optionalError = Object.hasOwn(input, "error");
-      const fields = ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])];
-      if (Object.keys(input).length !== fields.length || fields.some(field => !Object.hasOwn(input, field)))
-        throw new Error("Unexpected or missing agent stop response fields");
-      const target = parseIdentity(input.target);
-      if (!sameAgentConversation(current.handle, target)) throw new Error("Mismatched agent stop target evidence");
-      assertSameAgentRun(input.handle, current.handle);
-      const incarnation = endpointId(input.endpointId);
-      if (!this.acceptIncarnation(current, incarnation)) throw new Error("Agent endpoint replacement makes stop unknown");
+      const input = parsePeerAgentControlResponse(response, current.handle, "stop");
+      if (!this.acceptIncarnation(current, input.endpointId))
+        throw new Error("Agent endpoint replacement makes stop unknown");
       this.assertStopAssociation(current);
-      current.endpointId = incarnation;
-      const accepted = input.state === "accepted" && input.reason === "shutdown-requested";
-      const closed = input.state === "closed" && input.reason === "already-exited";
-      const unknown = input.state === "unknown" && input.reason === "shutdown-throw";
-      if (!accepted && !closed && !unknown) throw new Error("Invalid agent stop outcome");
-      if (optionalError && (typeof input.error !== "string" || !input.error.length || input.error.length > 1024))
-        throw new Error("Invalid agent stop error evidence");
-      if (accepted) return this.finishStop(current, "accepted", "shutdown-requested");
-      if (closed) return this.finishStop(current, "closed", "already-exited");
+      if (input.state === "accepted") return this.finishStop(current, "accepted", "shutdown-requested");
+      if (input.state === "closed") return this.finishStop(current, "closed", "already-exited");
       return this.finishStop(current, "unknown", "shutdown-throw",
-        optionalError ? input.error as string : "Pi shutdown threw; its outcome is unknown");
+        input.error ?? "Pi shutdown threw; its outcome is unknown");
     } catch (error) {
       // Validation failure after a request cannot prove that shutdown was not requested.
       return this.finishStop(current, "unknown", "changed", errorText(error));

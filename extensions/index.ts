@@ -237,39 +237,32 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       if (!shortcutRegistered) {
         shortcutRegistered = true;
         const usedKeys = new Set<string>();
+        const registerOptionalShortcut = (variable: string, parse: (value?: string) => string | undefined,
+            action: Parameters<ExtensionAPI["registerShortcut"]>[1], unavailable: string): void => {
+          try {
+            const key = parse(process.env[variable]);
+            if (key && usedKeys.has(key)) throw new Error(variable + " conflicts with an earlier Rexpi shortcut");
+            if (!key) return;
+            pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], action);
+            usedKeys.add(key);
+          } catch (error) { console.warn("rexpi: " + errorText(error) + "; " + unavailable); }
+        };
         // Reserve the model-independent stop first so navigation cannot shadow it.
-        try {
-          const key = messagesStopKey(process.env.PI_REX_MESSAGES_STOP_KEY);
-          if (key) {
-            pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
-              description: "Stop Rexpi result return without a model call",
-              handler: async (keyCtx) => {
-                try {
-                  const active = requireFeature(runtime, messaging, keyCtx.sessionManager.getSessionId());
-                  keyCtx.ui.notify(stopMessaging(active), "info");
-                } catch (error) { keyCtx.ui.notify(errorText(error), "warning"); }
-              },
-            });
-            usedKeys.add(key);
-          }
-        } catch (error) { console.warn("rexpi: " + errorText(error) + "; direct messaging stop shortcut unavailable"); }
-        try {
-          const key = returnKey(process.env.PI_REX_RETURN_KEY);
-          if (key && usedKeys.has(key)) throw new Error("PI_REX_RETURN_KEY conflicts with PI_REX_MESSAGES_STOP_KEY");
-          if (key) {
-            pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
-              description: "Return to the originating Pi conversation in Rex", handler: back,
-            });
-            usedKeys.add(key);
-          }
-        } catch (error) { console.warn("rexpi: " + errorText(error) + "; rexpi_return_to_parent remains available"); }
-        try {
-          const key = agentsKey(process.env.PI_REX_AGENTS_KEY);
-          if (key && usedKeys.has(key)) throw new Error("PI_REX_AGENTS_KEY conflicts with a stop/return shortcut");
-          if (key) pi.registerShortcut(key as Parameters<ExtensionAPI["registerShortcut"]>[0], {
-            description: "Show agents in Rex", handler: agents.open,
-          });
-        } catch (error) { console.warn("rexpi: " + errorText(error) + "; /rxa remains available"); }
+        registerOptionalShortcut("PI_REX_MESSAGES_STOP_KEY", messagesStopKey, {
+          description: "Stop Rexpi result return without a model call",
+          handler: async (keyCtx) => {
+            try {
+              const active = requireFeature(runtime, messaging, keyCtx.sessionManager.getSessionId());
+              keyCtx.ui.notify(stopMessaging(active), "info");
+            } catch (error) { keyCtx.ui.notify(errorText(error), "warning"); }
+          },
+        }, "direct messaging stop shortcut unavailable");
+        registerOptionalShortcut("PI_REX_RETURN_KEY", returnKey, {
+          description: "Return to the originating Pi conversation in Rex", handler: back,
+        }, "rexpi_return_to_parent remains available");
+        registerOptionalShortcut("PI_REX_AGENTS_KEY", agentsKey, {
+          description: "Show agents in Rex", handler: agents.open,
+        }, "/rxa remains available");
       }
       if (!registered) {
         registered = true;

@@ -7,7 +7,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { canonicalAgentName } from "./agent-name.ts";
 import { identity as parseIdentity, isLive, piSessionId as validPiSessionId, record, sameIdentity, uuid, type Identity } from "./state.ts";
 import type { Runtime, Snapshot } from "./runtime.ts";
-import { assertSameAgentRun, parseAgentHandle, type AgentHandle } from "./agent.ts";
+import { assertSameAgentRun, parseAgentHandle, sameAgentConversation, type AgentHandle } from "./agent.ts";
 import { MessageDeliveryLedger, messageDeliveryEvidenceId, type MessageDeliverySnapshot } from "./messaging/delivery.ts";
 import { assertLiveEndpoint, contextText, endpoint, endpointFromBinding, makeEnvelope, sameEndpoint,
   KINDS, type Endpoint, type Kind } from "./messaging/protocol.ts";
@@ -211,6 +211,38 @@ function agentControlInput(value: unknown): PeerAgentControlInput {
     throw new Error("Invalid expected agent endpoint incarnation");
   return { handle: parseAgentHandle(input.handle), endpointId: input.endpointId };
 }
+
+export function parsePeerAgentControlResponse(value: unknown, expected: AgentHandle,
+    operation: "cancel"): PeerAgentCancelResult;
+export function parsePeerAgentControlResponse(value: unknown, expected: AgentHandle,
+    operation: "stop"): PeerAgentStopResult;
+export function parsePeerAgentControlResponse(value: unknown, expected: AgentHandle,
+    operation: "cancel" | "stop"): PeerAgentCancelResult | PeerAgentStopResult {
+  const input = record(value), optionalError = Object.hasOwn(input, "error");
+  keys(input, ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])]);
+  const target = parseIdentity(input.target), handle = parseAgentHandle(input.handle);
+  if (!sameAgentConversation(expected, target) || typeof input.endpointId !== "string"
+      || !/^[0-9a-f]{64}$/.test(input.endpointId)) throw new Error(`Mismatched agent ${operation} response`);
+  assertSameAgentRun(handle, expected);
+  if (optionalError && (typeof input.error !== "string" || !input.error.length || input.error.length > 1024))
+    throw new Error(`Invalid agent ${operation} error evidence`);
+  const common = { target, endpointId: input.endpointId, handle,
+    ...(optionalError ? { error: input.error as string } : {}) };
+  if (operation === "cancel") {
+    const acknowledged = input.state === "acknowledged" && input.reason === "busy";
+    const settled = input.state === "settled"
+      && ["idle", "already-settled", "no-active-work"].includes(String(input.reason));
+    const unknown = input.state === "unknown" && input.reason === "abort-throw";
+    if (!acknowledged && !settled && !unknown) throw new Error("Invalid agent cancel outcome");
+    return { ...common, state: input.state as PeerAgentCancelState, reason: input.reason as PeerAgentCancelReason };
+  }
+  const accepted = input.state === "accepted" && input.reason === "shutdown-requested";
+  const closed = input.state === "closed" && input.reason === "already-exited";
+  const unknown = input.state === "unknown" && input.reason === "shutdown-throw";
+  if (!accepted && !closed && !unknown) throw new Error("Invalid agent stop outcome");
+  return { ...common, state: input.state as PeerAgentStopState, reason: input.reason as PeerAgentStopReason };
+}
+
 export function decodePeerRequest(body: string): PeerRequest {
   if (Buffer.byteLength(body) > MAX_PEER_REQUEST_BYTES) throw new Error("Peer request exceeds 40 KiB");
   const v = record(JSON.parse(body));
@@ -810,22 +842,7 @@ export class PeerRuntime {
       throw unknownCancel(error);
     }
     try {
-      const input = record(result), optionalError = Object.hasOwn(input, "error");
-      keys(input, ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])]);
-      const targetIdentity = parseIdentity(input.target), responseHandle = parseAgentHandle(input.handle);
-      if (targetIdentity.conversationId !== target || typeof input.endpointId !== "string"
-          || !/^[0-9a-f]{64}$/.test(input.endpointId)) throw new Error("Mismatched agent cancel response");
-      assertSameAgentRun(responseHandle, handle);
-      const acknowledged = input.state === "acknowledged" && input.reason === "busy";
-      const settled = input.state === "settled"
-        && ["idle", "already-settled", "no-active-work"].includes(String(input.reason));
-      const unknown = input.state === "unknown" && input.reason === "abort-throw";
-      if (!acknowledged && !settled && !unknown) throw new Error("Invalid agent cancel outcome");
-      if (optionalError && (typeof input.error !== "string" || !input.error.length || input.error.length > 1024))
-        throw new Error("Invalid agent cancel error evidence");
-      return { target: targetIdentity, endpointId: input.endpointId, handle: responseHandle,
-        state: input.state as PeerAgentCancelState, reason: input.reason as PeerAgentCancelReason,
-        ...(optionalError ? { error: input.error as string } : {}) };
+      return parsePeerAgentControlResponse(result, handle, "cancel");
     } catch (error) {
       // A response that cannot be correlated cannot retract an abort that may already have run.
       throw unknownCancel(error);
@@ -839,21 +856,7 @@ export class PeerRuntime {
     // reserves PeerAgentStopUnknownError for failures after the request write or during response correlation.
     const result = await this.request(target, "agentStop", params, randomUUID(), signal);
     try {
-      const input = record(result), optionalError = Object.hasOwn(input, "error");
-      keys(input, ["target", "endpointId", "handle", "state", "reason", ...(optionalError ? ["error"] : [])]);
-      const targetIdentity = parseIdentity(input.target), responseHandle = parseAgentHandle(input.handle);
-      if (targetIdentity.conversationId !== target || typeof input.endpointId !== "string"
-          || !/^[0-9a-f]{64}$/.test(input.endpointId)) throw new Error("Mismatched agent stop response");
-      assertSameAgentRun(responseHandle, handle);
-      const accepted = input.state === "accepted" && input.reason === "shutdown-requested";
-      const closed = input.state === "closed" && input.reason === "already-exited";
-      const unknown = input.state === "unknown" && input.reason === "shutdown-throw";
-      if (!accepted && !closed && !unknown) throw new Error("Invalid agent stop outcome");
-      if (optionalError && (typeof input.error !== "string" || !input.error.length || input.error.length > 1024))
-        throw new Error("Invalid agent stop error evidence");
-      return { target: targetIdentity, endpointId: input.endpointId, handle: responseHandle,
-        state: input.state as PeerAgentStopState, reason: input.reason as PeerAgentStopReason,
-        ...(optionalError ? { error: input.error as string } : {}) };
+      return parsePeerAgentControlResponse(result, handle, "stop");
     } catch (error) {
       // A response that cannot be correlated cannot prove that shutdown was not requested.
       throw unknownStop(error);

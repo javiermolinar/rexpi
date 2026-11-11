@@ -60,7 +60,7 @@ function completion(handle, overrides = {}) {
 
 function tracked() {
   const runtime = new AgentRuntime();
-  const handle = runtime.track(makeHandle());
+  const handle = runtime.register(makeHandle());
   return { runtime, handle, source: localIdentity(handle) };
 }
 
@@ -182,7 +182,7 @@ test("foreign, nonlocal, miscorrelated, malformed, and stale completions fail wi
   }
   assertNoCompletion(runtime, handle);
 
-  const newer = runtime.track({ ...handle, endpointGeneration: handle.endpointGeneration + 1 });
+  const newer = runtime.register({ ...handle, endpointGeneration: handle.endpointGeneration + 1 });
   assert.equal((await runtime.status(handle)).lifecycle.binding, "replaced");
   assert.throws(() => runtime.complete(handle, source, completion(handle)), /Stale or replaced/);
   assertNoCompletion(runtime, handle, "2");
@@ -192,7 +192,7 @@ test("foreign, nonlocal, miscorrelated, malformed, and stale completions fail wi
 test("an exited handle is still rejected when its endpoint generation becomes stale", () => {
   const { runtime, handle, source } = tracked();
   runtime.observe(handle, { type: "binding.exited" });
-  runtime.track({ ...handle, endpointGeneration: handle.endpointGeneration + 1 });
+  runtime.register({ ...handle, endpointGeneration: handle.endpointGeneration + 1 });
   assert.equal(runtime.events(handle).events.at(-1).lifecycle.binding, "exited");
   assert.throws(() => runtime.complete(handle, source, completion(handle)), /Stale or replaced/);
   assertNoCompletion(runtime, handle, "2");
@@ -235,7 +235,7 @@ test("summary, artifact, error, count, and total serialized record bounds fail c
 
 test("completion evidence uses existing per-run event retention and adds no run", () => {
   const runtime = new AgentRuntime(undefined, { maxEventsPerRun: 2, maxRuns: 1 });
-  const handle = runtime.track(makeHandle()), source = localIdentity(handle);
+  const handle = runtime.register(makeHandle()), source = localIdentity(handle);
   runtime.observe(handle, { type: "activity.sample", idle: true, pendingMessages: false });
   const stored = runtime.complete(handle, source, completion(handle));
   const page = runtime.events(handle);
@@ -246,7 +246,7 @@ test("completion evidence uses existing per-run event retention and adds no run"
   assert.equal(page.events.at(-1).type, "result.completed");
   assert.equal(page.resultAvailable, true);
   assert.strictEqual(runtime.complete(handle, source, completion(handle)), stored);
-  assert.throws(() => runtime.track(makeHandle()), /run history bound/);
+  assert.throws(() => runtime.register(makeHandle()), /run history bound/);
 });
 
 test("rexpi_agent_complete is sequential and fenced to the verified source session and local child", async () => {
