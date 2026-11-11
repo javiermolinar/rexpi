@@ -37,6 +37,7 @@ import { registerAgentTools } from "./agent.ts";
 import { BOOTSTRAP_ENV, ORIENTATION_ENTRY, decodeBootstrap, rexId, type Bootstrap, type Placement } from "../lib/state.ts";
 import { capabilityGrant } from "./grants.ts";
 import { DelegationCache, DelegationRuntime } from "../lib/delegation.ts";
+import { createFilePolicySelectionRuntime } from "../lib/model-selection.ts";
 import { FanoutRegistry, FanoutRuntime } from "../lib/fanout.ts";
 import { JoinCache, JoinRuntime } from "../lib/join.ts";
 import { registerFanoutTools } from "./fanout.ts";
@@ -225,7 +226,8 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
         piBinary: process.env.PI_REX_BINARY ?? "pi", path: process.env.PATH ?? "",
         client: process.env.PI_REX_CLIENT, returnKey: process.env.PI_REX_RETURN_KEY, agentsKey: process.env.PI_REX_AGENTS_KEY,
         messagesStopKey: process.env.PI_REX_MESSAGES_STOP_KEY, agents: agentRuntime });
-      delegation = new DelegationRuntime(launcher, agentRuntime, delegationCalls);
+      delegation = new DelegationRuntime(launcher, agentRuntime, delegationCalls,
+        createFilePolicySelectionRuntime(agentDirectory, ctx.modelRegistry));
       fanout = new FanoutRuntime(delegation, fanoutRegistry);
       joinRuntime = new JoinRuntime(delegation, joinCache);
       terminal = new TerminalOpener(active);

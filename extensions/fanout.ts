@@ -9,6 +9,7 @@ import { requireFeature, type Runtime } from "../lib/runtime.ts";
 import type { Identity } from "../lib/state.ts";
 import { capabilityGrant } from "./grants.ts";
 import { boundedJson, clippedText } from "./presentation.ts";
+import { THINKING, literalUnion } from "./schemas.ts";
 
 const MAX_JOIN_PRESENTATION_BYTES = 256 * 1024;
 function resultPresentation(result: AgentResult) {
@@ -23,6 +24,7 @@ function resultPresentation(result: AgentResult) {
 function joinText(fanoutId: string, outcome: JoinOutcome): string {
   const children = outcome.children.map(child => ({ id: child.id, state: child.state,
     ...(child.handle ? { handle: child.handle } : {}),
+    ...(child.routing ? { routing: child.routing } : {}),
     ...(child.result ? { result: resultPresentation(child.result) } : {}),
     ...(child.error ? { error: clippedText(child.error, 1024) } : {}) }));
   return boundedJson({ fanoutId, state: outcome.state, coordinator: outcome.coordinator,
@@ -40,6 +42,10 @@ export interface FanoutToolState {
 const child = Type.Object({
   id: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }),
   task: Type.String({ minLength: 1, maxLength: 16384 }), grant: capabilityGrant,
+  provider: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
+  thinking: Type.Optional(literalUnion(THINKING)),
+  selection: Type.Optional(Type.String()),
+  allowAutomatic: Type.Optional(Type.Boolean()),
   notifyParentOnSettlement: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 function origin(execution: FanoutExecution, runtime?: Runtime): Identity {
@@ -62,6 +68,11 @@ export function registerFanoutTools(pi: ExtensionAPI, current: () => FanoutToolS
       if (!registry || !join) throw new Error("Fan-out evidence is unavailable");
       const concurrency = params.concurrency ?? 2, inputs = params.children.map(child => ({
         id: child.id, task: child.task, options: { grant: child.grant,
+          ...(child.provider === undefined ? {} : { provider: child.provider }),
+          ...(child.model === undefined ? {} : { model: child.model }),
+          ...(child.thinking === undefined ? {} : { thinking: child.thinking }),
+          ...(child.selection === undefined ? {} : { selection: child.selection }),
+          ...(child.allowAutomatic === undefined ? {} : { allowAutomatic: child.allowAutomatic }),
           ...(child.notifyParentOnSettlement === undefined ? {}
             : { notifyParentOnSettlement: child.notifyParentOnSettlement }) },
       }));

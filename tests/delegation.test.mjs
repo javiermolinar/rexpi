@@ -29,7 +29,7 @@ async function fixture(t, options = {}) {
   const launcher = new Launcher(a.runtime, { extension, piBinary: "/bin/echo", agentDirectory: a.root,
     stateDirectory: a.store.directory, path: process.env.PATH, startupTimeoutMs: options.startupTimeoutMs ?? 100,
     messaging, agents: agent });
-  const delegation = new DelegationRuntime(launcher, agent, cache);
+  const delegation = new DelegationRuntime(launcher, agent, cache, options.policy);
   const f = { ...a, sm, messaging, agent, launcher, delegation, cache };
   f.ack = args => {
     const raw = args.find(s => s.startsWith(BOOTSTRAP_ENV + "="));
@@ -172,6 +172,23 @@ test("rexpi_delegate tool preserves task and options through the existing compos
   assert.equal(f.w.created.length, 1);
 });
 
+test("delegate forwards physical and native virtual targets without invoking policy routing", async t => {
+  const f = await fixture(t);
+  const physical = await f.delegation.delegate("physical-target", "Use a physical target",
+    { grant: grant(), provider: "openai-codex", model: "gpt-6-astra", thinking: "max" }, f.root);
+  const virtual = await f.delegation.delegate("virtual-target", "Use a native virtual target",
+    { grant: grant(), provider: "rex", model: "rex/deep-astra/high", thinking: "off" }, f.root);
+  assert.equal(physical.routing, undefined); assert.equal(virtual.routing, undefined);
+  for (const [index, provider, model, thinking] of [
+    [0, "openai-codex", "gpt-6-astra", "max"], [1, "rex", "rex/deep-astra/high", "off"],
+  ]) {
+    const args = f.w.created[index];
+    assert.deepEqual(args.filter(value => ["--provider", "--model", "--thinking", provider, model, thinking].includes(value)),
+      ["--provider", provider, "--model", model, "--thinking", thinking]);
+  }
+  assert.equal(f.runtime.snapshot().state.piSessionId, "test-session");
+});
+
 test("exact delegation retries inspect one outcome; conflicts and coordinator replacement never relaunch", async t => {
   const f = await fixture(t), options = { grant: grant({ returnResults: true }), notifyParentOnSettlement: true };
   const first = f.delegation.delegate("repeat-delegation", "literal task", options, f.root);
@@ -256,4 +273,109 @@ test("delegation stop uses the real authorization object contract", async t => {
   const f = await fixture(t), result = await f.delegation.delegate("real-stop-contract", "task", { grant: grant() }, f.root);
   const stopped = await f.delegation.stop(result.handle, f.runtime.snapshot().state, true);
   assert.equal(stopped.state, "disconnected");
+});
+
+function routedResolution(selection, task) {
+  const automatic = selection.includes("/auto");
+  return {
+    assignment: {
+      decisionId: `decision-${task}`, policyRevision: "policy-revision-1", selection,
+      choice: automatic ? "rex/everyday-sol:high" : selection,
+      target: { provider: "openai-codex", model: "gpt-6-astra", thinking: "max" },
+      instructions: "Investigate only inside the granted scope.",
+    },
+    receipt: { id: `receipt-${task}`, operation: automatic ? "select" : "resolve" },
+    ...(automatic ? { selectorMetadata: { task, usage: { totalTokens: 7, cost: 0.01 } } } : {}),
+  };
+}
+
+function fakePolicy(calls, overrides = {}) {
+  return {
+    async select(selection, task, allowAutomatic) {
+      calls.push({ operation: "select", selection, task, allowAutomatic });
+      return routedResolution(selection, task);
+    },
+    async revalidate(previous) {
+      calls.push({ operation: "revalidate", selection: previous.assignment.selection, task: previous.assignment.decisionId });
+      return { ...previous, receipt: { ...previous.receipt, id: `${previous.receipt.id}-revalidated`, operation: "revalidate" } };
+    },
+    ...overrides,
+  };
+}
+
+test("policy selection revalidates a physical target and applies guidance only to the child", async t => {
+  const calls = [], f = await fixture(t, { policy: fakePolicy(calls) });
+  const result = await f.delegation.delegate("routed-delegation", "Investigate the launch boundary",
+    { grant: grant(), selection: "rex/deep-astra:high" }, f.root);
+  assert.deepEqual(calls.map(call => call.operation), ["select", "revalidate"]);
+  assert.equal(calls[0].allowAutomatic, false);
+  const args = f.w.created[0], prompt = args.at(-1);
+  assert.ok(prompt.startsWith("Investigate the launch boundary\n\nPolicy role guidance (soft instructions, not tool permissions):\nInvestigate only inside the granted scope.\n\nDelegation capability manifest:"));
+  assert.ok(args.includes("openai-codex")); assert.ok(args.includes("gpt-6-astra")); assert.ok(args.includes("max"));
+  assert.equal(result.routing.receipt.operation, "revalidate");
+  assert.equal(result.routing.assignment.decisionId, "decision-Investigate the launch boundary");
+  const encoded = args.find(value => value.startsWith(CAPABILITY_GRANT_ENV + "="));
+  assert.deepEqual(decodeCapabilityGrant(encoded.slice(encoded.indexOf("=") + 1)), grant(), "routing cannot expand the grant");
+  assert.equal(f.runtime.snapshot().state.piSessionId, "test-session", "the parent session is unchanged");
+});
+
+test("selection rejects raw model overrides and policy failures before launch", async t => {
+  const calls = [], f = await fixture(t, { policy: fakePolicy(calls) });
+  for (const [index, options] of [
+    { grant: grant(), selection: "rex/deep-astra:high", provider: "openai-codex" },
+    { grant: grant(), selection: "rex/deep-astra:high", model: "gpt-6-astra" },
+    { grant: grant(), selection: "rex/deep-astra:high", thinking: "max" },
+    { grant: grant(), allowAutomatic: true },
+  ].entries()) await assert.rejects(f.delegation.delegate(`invalid-${index}`, "task", options, f.root));
+  assert.equal(calls.length, 0); assert.equal(f.w.created.length, 0);
+  const failed = await fixture(t, { policy: fakePolicy(calls, { async select() { calls.push({ operation: "select" }); throw new Error("selector failed"); } }) });
+  await assert.rejects(failed.delegation.delegate("failed-selection", "task",
+    { grant: grant(), selection: "rex/auto", allowAutomatic: true }, failed.root), /selector failed/);
+  assert.equal(failed.w.created.length, 0);
+  const stale = await fixture(t, { policy: fakePolicy(calls, { async revalidate() { throw new Error("stale policy"); } }) });
+  await assert.rejects(stale.delegation.delegate("stale-selection", "task",
+    { grant: grant(), selection: "rex/deep-astra:high" }, stale.root), /stale policy/);
+  assert.equal(stale.w.created.length, 0);
+});
+
+test("pre-cancelled routed delegation neither launches nor falls back", async t => {
+  const calls = [], reason = new Error("cancel before routing");
+  const policy = fakePolicy(calls, { async select(selection, task, allowAutomatic, signal) {
+    calls.push({ operation: "select", selection }); signal.throwIfAborted();
+    return routedResolution(selection, task);
+  } });
+  const f = await fixture(t, { policy }), controller = new AbortController(); controller.abort(reason);
+  await assert.rejects(f.delegation.delegate("cancelled-routing", "task",
+    { grant: grant(), selection: "rex/deep-astra:high" }, f.root, controller.signal), error => error === reason);
+  assert.deepEqual(calls, [{ operation: "select", selection: "rex/deep-astra:high" }]);
+  assert.equal(f.w.created.length, 0);
+});
+
+test("rexpi_delegate tool forwards automatic selection without changing parent state", async t => {
+  const calls = [], f = await fixture(t, { policy: fakePolicy(calls) }), tools = new Map();
+  registerDelegationTool({ registerTool: tool => tools.set(tool.name, tool) },
+    () => ({ runtime: f.runtime, delegation: f.delegation, messaging: f.messaging, cache: f.cache }));
+  const input = { task: "investigate through the tool", grant: grant(), selection: "rex/auto", allowAutomatic: true };
+  const result = await tools.get("rexpi_delegate").execute("tool-routed-delegation", input, undefined, undefined, f.ctx);
+  assert.equal(result.details.routing.assignment.selection, "rex/auto");
+  assert.equal(result.details.routing.selectorMetadata.task, "investigate through the tool");
+  assert.equal(result.details.routing.receipt.operation, "revalidate");
+  const visible = JSON.parse(result.content[0].text.slice(result.content[0].text.indexOf("\n") + 1));
+  assert.equal(visible.routing.assignment.selection, "rex/auto");
+  assert.equal(visible.routing.selectorMetadata.task, "investigate through the tool");
+  assert.equal(f.runtime.snapshot().state.piSessionId, "test-session");
+  assert.deepEqual(await tools.get("rexpi_delegate").execute("tool-routed-delegation", input, undefined, undefined, f.ctx), result);
+  assert.equal(calls.filter(call => call.operation === "select").length, 1);
+  assert.equal(f.w.created.length, 1);
+});
+
+test("uncertain routed creation is not retried or reselected under the same logical ID", async t => {
+  const calls = [], f = await fixture(t, { policy: fakePolicy(calls) }); f.w.failCreate = true;
+  const options = { grant: grant(), selection: "rex/auto", allowAutomatic: true };
+  const first = await f.delegation.delegate("uncertain-routing", "investigate uncertain creation", options, f.root);
+  assert.equal(first.creation, "unknown"); assert.equal(first.binding, "unconfirmed");
+  assert.equal(await f.delegation.delegate("uncertain-routing", "investigate uncertain creation", options, f.root), first);
+  assert.equal(f.w.created.length, 1);
+  assert.equal(calls.filter(call => call.operation === "select").length, 1);
+  assert.equal(calls.filter(call => call.operation === "revalidate").length, 1);
 });

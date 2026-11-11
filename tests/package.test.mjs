@@ -10,13 +10,18 @@ function fixture() {
     ["assets/rexpi.jpg", "image fixture"],
     ["assets/agents.png", "agent screenshot fixture"],
     ["assets/worktrees.png", "worktree screenshot fixture"],
+    ["examples/virtual-models.json", "{}"],
+    ["lib/vendor/pi-routing-policies/README.md", "Pinned policy runtime"],
+    ["lib/vendor/pi-routing-policies/LICENSE", "Apache-2.0"],
+    ["lib/vendor/pi-routing-policies/llm.js", 'import { clampThinkingLevel } from "@earendil-works/pi-ai";'],
     ["extensions/index.ts", 'import { runtime } from "../lib/runtime.ts";'],
     ["lib/runtime.ts", 'import { readFileSync } from "node:fs"; import { Type } from "typebox";'],
   ]);
   const manifest = {
     name: "@example/rexpi", version: "0.1.0", keywords: ["pi-package"],
     pi: { extensions: ["./extensions/index.ts"] },
-    peerDependencies: { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", typebox: "*" },
+    peerDependencies: { "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*",
+      "@earendil-works/pi-tui": "*", typebox: "*" },
   };
   const pack = { name: manifest.name, version: manifest.version, files: [...sources.keys()].map(path => ({ path })) };
   return { manifest, pack, sources, check: () => validatePackage(manifest, pack, path => sources.get(path)) };
@@ -24,10 +29,12 @@ function fixture() {
 
 test("validates a scoped Pi package with release documents, README images, and runtime imports", () => {
   const f = fixture();
-  assert.equal(f.check().size, 9);
+  assert.equal(f.check().size, 13);
 });
 
-for (const path of ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "assets/rexpi.jpg", "assets/agents.png", "assets/worktrees.png", "extensions/index.ts", "lib/runtime.ts"]) {
+for (const path of ["package.json", "LICENSE", "README.md", "CHANGELOG.md", "assets/rexpi.jpg", "assets/agents.png",
+  "assets/worktrees.png", "examples/virtual-models.json", "lib/vendor/pi-routing-policies/README.md",
+  "lib/vendor/pi-routing-policies/LICENSE", "extensions/index.ts", "lib/runtime.ts"]) {
   test(`missing required file or runtime import is rejected: ${path}`, () => {
     const f = fixture(); f.pack.files = f.pack.files.filter(file => file.path !== path);
     assert.throws(f.check, /Missing package|Missing packaged import/);

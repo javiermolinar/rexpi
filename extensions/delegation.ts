@@ -31,6 +31,8 @@ export function registerDelegationTool(pi: ExtensionAPI, current: () => Delegati
       focus: Type.Optional(Type.Boolean()),
       provider: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
       thinking: Type.Optional(literalUnion(THINKING)),
+      selection: Type.Optional(Type.String()),
+      allowAutomatic: Type.Optional(Type.Boolean()),
       notifyParentOnSettlement: Type.Optional(Type.Boolean()),
     }, { additionalProperties: false }),
     async execute(id, params, signal, _update, ctx) {
@@ -46,6 +48,8 @@ export function registerDelegationTool(pi: ExtensionAPI, current: () => Delegati
         ...(params.provider === undefined ? {} : { provider: params.provider }),
         ...(params.model === undefined ? {} : { model: params.model }),
         ...(params.thinking === undefined ? {} : { thinking: params.thinking }),
+        ...(params.selection === undefined ? {} : { selection: params.selection }),
+        ...(params.allowAutomatic === undefined ? {} : { allowAutomatic: params.allowAutomatic }),
         ...(params.notifyParentOnSettlement === undefined ? {}
           : { notifyParentOnSettlement: params.notifyParentOnSettlement }) };
       // Admission precedes every runtime/capability check. Exact historical calls inspect
@@ -61,7 +65,7 @@ export function registerDelegationTool(pi: ExtensionAPI, current: () => Delegati
           source.capability?.toolSignal(signal) ?? signal);
       });
       const text = `Delegation ${details.creation}/${details.binding}; activity unknown; result pending.\n`
-        + boundedJson({ handle: details.handle }, 4096, "Delegation");
+        + boundedJson({ handle: details.handle, ...(details.routing ? { routing: details.routing } : {}) }, 4096, "Delegation");
       return { content: [{ type: "text", text }], details };
     },
   });

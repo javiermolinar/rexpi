@@ -4,6 +4,7 @@ import type { AgentResult } from "./agent-runtime.ts";
 import type { DelegationRuntime } from "./delegation.ts";
 import type { FanoutChildExecution, FanoutExecution, FanoutSnapshot } from "./fanout.ts";
 import type { Identity } from "./state.ts";
+import type { PolicyResolution } from "./model-selection.ts";
 
 export const MAX_JOIN_OUTCOME_BYTES = 2 * 1024 * 1024;
 export type JoinChildState = "succeeded" | "failed" | "cancelled" | "unknown" | "not-dispatched";
@@ -12,6 +13,7 @@ export interface JoinChildOutcome {
   state: JoinChildState;
   handle?: AgentHandle;
   result?: AgentResult;
+  routing?: PolicyResolution;
   error?: string;
 }
 export interface JoinOutcome {
@@ -59,7 +61,8 @@ function outcome(id: string, children: JoinChildOutcome[], interrupted: boolean)
   return Object.freeze({ ...value, bytes });
 }
 function withoutResult(child: FanoutChildExecution): JoinChildOutcome {
-  const base = { id: child.id, ...(child.handle ? { handle: child.handle } : {}) };
+  const base = { id: child.id, ...(child.handle ? { handle: child.handle } : {}),
+    ...(child.delegation?.routing ? { routing: child.delegation.routing } : {}) };
   if (child.state === "failed") return { ...base, state: "failed", ...(child.error ? { error: child.error } : {}) };
   if (child.state === "cancelled") return { ...base, state: "cancelled" };
   if (child.state === "blocked" || child.state === "revoked")
@@ -102,12 +105,13 @@ export class JoinRuntime {
           try {
             const result = await this.delegation.result(child.handle, source, signal);
             if (result.state === "ready") children[position] = { id: child.id, state: "succeeded",
-              handle: child.handle, result };
+              handle: child.handle, result, ...(child.delegation?.routing ? { routing: child.delegation.routing } : {}) };
             else if (result.state === "failed") children[position] = { id: child.id, state: "failed",
-              handle: child.handle, result };
+              handle: child.handle, result, ...(child.delegation?.routing ? { routing: child.delegation.routing } : {}) };
             else if (result.state === "cancelled") children[position] = { id: child.id, state: "cancelled",
-              handle: child.handle, result };
-            else children[position] = { id: child.id, state: "unknown", handle: child.handle, result };
+              handle: child.handle, result, ...(child.delegation?.routing ? { routing: child.delegation.routing } : {}) };
+            else children[position] = { id: child.id, state: "unknown", handle: child.handle, result,
+              ...(child.delegation?.routing ? { routing: child.delegation.routing } : {}) };
           } catch (error) {
             children[position] = { id: child.id, state: "unknown", handle: child.handle, error: errorText(error) };
           }

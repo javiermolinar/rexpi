@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DelegateOptions, DelegationResult, DelegationRuntime } from "./delegation.ts";
+import { validateDelegationModelOptions } from "./delegation.ts";
 import type { AgentHandle } from "./agent.ts";
 
 export interface FanoutChildInput {
@@ -104,6 +105,7 @@ export class FanoutRuntime {
       throw new Error("Fan-out concurrency must be an integer from 1 to 8");
     if (typeof options.cwd !== "string" || !options.cwd) throw new Error("Fan-out cwd is required");
     const admitted = admittedInputs(inputs);
+    for (const child of admitted) validateDelegationModelOptions(child.options);
     if (new Set(admitted.map(child => child.id)).size !== admitted.length) throw new Error("Fan-out child IDs must be unique");
     for (const child of admitted) if (typeof child.id !== "string" || !child.id.length || child.id.length > 1024)
       throw new Error("Invalid fan-out child ID");

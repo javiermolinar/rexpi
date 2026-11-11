@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Value } from "typebox/value";
 import { registerFanoutTools } from "../extensions/fanout.ts";
 import { FanoutRegistry, FanoutRuntime } from "../lib/fanout.ts";
 import { JoinCache, JoinRuntime } from "../lib/join.ts";
@@ -19,7 +20,12 @@ function fixture() {
       launches.push({ id, task, options });
       const value = handle(task.replace(/^task /, ""));
       return { handle: value, creation: "confirmed", binding: "bound", activity: "unknown", result: "pending",
-        subscription: { settlement: false }, launch: { origin: source } };
+        subscription: { settlement: false }, launch: { origin: source },
+        ...(options.selection ? { routing: {
+          assignment: { decisionId: `decision-${task}`, selection: options.selection,
+            choice: options.selection, target: { provider: "fake", model: "physical", thinking: "high" } },
+          receipt: { operation: "revalidate" }, selectorMetadata: { task, usage: { totalTokens: 5, cost: 0.01 } },
+        } } : {}) };
     },
     async result(value) {
       const configured = states.get(value.requestId) ?? "pending";
@@ -36,6 +42,79 @@ function fixture() {
   return { registry, join, launches, states, tools, runtime, fanout,
     set current(value) { current = value; }, get current() { return current; } };
 }
+
+test("rexpi_fanout forwards independent child models and includes them in logical identity", async () => {
+  const f = fixture(), children = [
+    { ...input("astra"), provider: "rex", model: "rex/deep-astra/high", thinking: "off" },
+    { ...input("flash"), provider: "openrouter", model: "deepseek/deepseek-v4.1-flash", thinking: "max" },
+    input("legacy"),
+  ], params = { children, concurrency: 1 };
+  const first = await f.tools.get("rexpi_fanout").execute("model-fanout", params, undefined, undefined, ctx);
+  assert.deepEqual(f.launches.map(launch => ({ task: launch.task, options: launch.options })), [
+    { task: "task astra", options: { grant: grant(), provider: "rex", model: "rex/deep-astra/high", thinking: "off" } },
+    { task: "task flash", options: { grant: grant(), provider: "openrouter",
+      model: "deepseek/deepseek-v4.1-flash", thinking: "max" } },
+    { task: "task legacy", options: { grant: grant() } },
+  ]);
+  const repeated = await f.tools.get("rexpi_fanout").execute("model-fanout", params, undefined, undefined, ctx);
+  assert.deepEqual(repeated.details, first.details);
+  assert.equal(f.launches.length, 3, "an exact repeat inspects the original children without relaunching");
+  for (const patch of [{ model: "rex/everyday-flash/high" }, { provider: "openai-codex" }, { thinking: "high" }]) {
+    const changed = children.map((child, index) => index === 0 ? { ...child, ...patch } : child);
+    await assert.rejects(f.tools.get("rexpi_fanout").execute("model-fanout",
+      { children: changed, concurrency: 1 }, undefined, undefined, ctx), /Conflicting fan-out logical ID/);
+  }
+  assert.equal(f.launches.length, 3, "changed model options cannot acquire the original logical identity");
+});
+
+test("rexpi_fanout child model validation is provider-portable and remains closed", () => {
+  const parameters = fixture().tools.get("rexpi_fanout").parameters;
+  for (const child of [
+    { ...input("virtual"), provider: "rex", model: "rex/deep-astra/high", thinking: "off" },
+    { ...input("codex"), provider: "openai-codex", model: "gpt-6-astra", thinking: "max" },
+    { ...input("anthropic"), provider: "anthropic", model: "claude-opus-5-5", thinking: "high" },
+    input("legacy"),
+  ]) assert.equal(Value.Check(parameters, { children: [child] }), true);
+  assert.equal(Value.Check(parameters, { children: [{ ...input("thinking"), thinking: "unlimited" }] }), false);
+  assert.equal(Value.Check(parameters, { children: [{ ...input("unknown"), extra: true }] }), false);
+});
+
+test("rexpi_fanout forwards policy selections and preserves per-child routing evidence", async () => {
+  const f = fixture(), children = [
+    { ...input("automatic"), selection: "rex/auto", allowAutomatic: true },
+    { ...input("explicit"), selection: "rex/deep-astra:high" },
+  ], params = { children, concurrency: 1 };
+  const launched = await f.tools.get("rexpi_fanout").execute("selection-fanout", params, undefined, undefined, ctx);
+  assert.deepEqual(f.launches.map(launch => launch.options), [
+    { grant: grant(), selection: "rex/auto", allowAutomatic: true },
+    { grant: grant(), selection: "rex/deep-astra:high" },
+  ]);
+  const routed = launched.details.children;
+  assert.deepEqual(routed.map(child => child.routing.selectorMetadata.task), ["task automatic", "task explicit"]);
+  assert.deepEqual(routed.map(child => child.routing.receipt.operation), ["revalidate", "revalidate"]);
+  const visible = JSON.parse(launched.content[0].text);
+  assert.deepEqual(visible.children.map(child => child.routing.selectorMetadata.task), ["task automatic", "task explicit"]);
+  f.states.set("automatic", "ready");
+  const joined = await f.tools.get("rexpi_join").execute("join-selection-fanout", { fanoutId: "selection-fanout" }, undefined, undefined, ctx);
+  assert.deepEqual(joined.details.children.map(child => child.routing.selectorMetadata.task), ["task automatic", "task explicit"],
+    "later result reads preserve the original per-child assignments");
+  assert.equal(Value.Check(f.tools.get("rexpi_fanout").parameters, params), true);
+  for (const patch of [{ selection: "rex/everyday-flash:high" }, { allowAutomatic: false }]) {
+    const changed = children.map((child, index) => index === 0 ? { ...child, ...patch } : child);
+    await assert.rejects(f.tools.get("rexpi_fanout").execute("selection-fanout",
+      { children: changed, concurrency: 1 }, undefined, undefined, ctx), /Conflicting fan-out logical ID/);
+  }
+  assert.equal(f.launches.length, 2);
+});
+
+test("fan-out rejects invalid model selection combinations before any child dispatch", async () => {
+  const f = fixture();
+  await assert.rejects(f.tools.get("rexpi_fanout").execute("invalid-selection-fanout", { children: [
+    { ...input("valid"), selection: "rex/deep-astra:high" },
+    { ...input("invalid"), selection: "rex/everyday-sol:high", provider: "openai-codex" },
+  ] }, undefined, undefined, ctx), /mutually exclusive/);
+  assert.equal(f.launches.length, 0);
+});
 
 test("rexpi_fanout and rexpi_join refresh partial outcomes without relaunching", async () => {
   const f = fixture();

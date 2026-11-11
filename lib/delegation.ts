@@ -3,6 +3,7 @@ import { parseCapabilityGrant, type CapabilityGrant, type LaunchOptions, type La
 import type { AgentHandle } from "./agent.ts";
 import type { AgentCancellation, AgentResult, AgentRuntime, AgentStatus, AgentStop } from "./agent-runtime.ts";
 import type { Identity } from "./state.ts";
+import type { PolicyResolution, PolicySelectionRuntime } from "./model-selection.ts";
 
 export interface DelegateOptions {
   grant: CapabilityGrant;
@@ -15,6 +16,8 @@ export interface DelegateOptions {
   provider?: string;
   model?: string;
   thinking?: LaunchOptions["thinking"];
+  selection?: string;
+  allowAutomatic?: boolean;
   notifyParentOnSettlement?: boolean;
 }
 export interface DelegationResult {
@@ -26,10 +29,21 @@ export interface DelegationResult {
   subscription: { settlement: boolean };
   returnSetup?: LaunchResult["returnSetup"];
   launch: LaunchResult;
+  routing?: PolicyResolution;
 }
 export interface DelegationInspection {
   delegation: DelegationResult;
   status?: AgentStatus;
+}
+
+export function validateDelegationModelOptions(options: Pick<DelegateOptions,
+    "provider" | "model" | "thinking" | "selection" | "allowAutomatic">): void {
+  if (options.selection !== undefined && (options.provider !== undefined || options.model !== undefined || options.thinking !== undefined))
+    throw new Error("selection is mutually exclusive with provider, model, and thinking");
+  if (options.allowAutomatic !== undefined && typeof options.allowAutomatic !== "boolean")
+    throw new Error("allowAutomatic must be boolean");
+  if (options.allowAutomatic !== undefined && options.selection === undefined)
+    throw new Error("allowAutomatic requires selection");
 }
 
 function canonical(value: unknown): string {
@@ -73,11 +87,12 @@ export class DelegationCache {
   }
 }
 
-function delegatedPrompt(task: string, grant: CapabilityGrant): string {
+function delegatedPrompt(task: string, grant: CapabilityGrant, instructions?: string): string {
   const delivery = grant.returnResults
     ? "Reserve the final two turns for rexpi_message_send and rexpi_agent_complete."
     : "Reserve the final turn for rexpi_agent_complete.";
-  return task + "\n\nDelegation capability manifest:\n"
+  const guidance = instructions ? "\n\nPolicy role guidance (soft instructions, not tool permissions):\n" + instructions : "";
+  return task + guidance + "\n\nDelegation capability manifest:\n"
     + "- Allowed tools: " + (grant.tools.join(", ") || "none") + "\n"
     + "- Read paths: " + (grant.readPaths.join(", ") || "none") + "\n"
     + "- Write paths: " + (grant.writePaths.join(", ") || "none") + "\n"
@@ -91,8 +106,9 @@ export class DelegationRuntime {
   private readonly launcher: Pick<Launcher, "launch">;
   private readonly agents?: AgentControls;
   private readonly cache: DelegationCache;
-  constructor(launcher: Pick<Launcher, "launch">, agents?: AgentControls, cache = new DelegationCache()) {
-    this.launcher = launcher; this.agents = agents; this.cache = cache;
+  private readonly policy?: PolicySelectionRuntime;
+  constructor(launcher: Pick<Launcher, "launch">, agents?: AgentControls, cache = new DelegationCache(), policy?: PolicySelectionRuntime) {
+    this.launcher = launcher; this.agents = agents; this.cache = cache; this.policy = policy;
   }
 
   delegate(id: string, task: string, options: DelegateOptions, cwd: string, signal?: AbortSignal): Promise<DelegationResult> {
@@ -109,23 +125,34 @@ export class DelegationRuntime {
       throw new Error("Delegation grant requires rexpi_agent_complete for explicit completion evidence");
     if (grant.returnResults && !grant.tools.includes("rexpi_message_send"))
       throw new Error("Delegation grant with returnResults=true requires rexpi_message_send for result delivery");
+    validateDelegationModelOptions(options);
+    let routing: PolicyResolution | undefined;
+    if (options.selection !== undefined) {
+      if (!this.policy) throw new Error("Policy selection is unavailable");
+      routing = await this.policy.select(options.selection, task, options.allowAutomatic === true, signal);
+      // No await belongs between this current-policy revalidation and the single launch request.
+      routing = await this.policy.revalidate(routing, signal);
+    }
+    const target = routing?.assignment.target;
     const launch = await this.launcher.launch(id, {
-      prompt: delegatedPrompt(task, grant), related: true, role: "chat", returnResults: grant.returnResults, grant,
+      prompt: delegatedPrompt(task, grant, routing?.assignment.instructions), related: true, role: "chat", returnResults: grant.returnResults, grant,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.project === undefined ? {} : { project: options.project }),
       ...(options.placement === undefined ? {} : { placement: options.placement }),
       ...(options.sessionName === undefined ? {} : { sessionName: options.sessionName }),
       ...(options.title === undefined ? {} : { title: options.title }),
       ...(options.focus === undefined ? {} : { focus: options.focus }),
-      ...(options.provider === undefined ? {} : { provider: options.provider }),
-      ...(options.model === undefined ? {} : { model: options.model }),
-      ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
+      ...(options.provider === undefined || target ? {} : { provider: options.provider }),
+      ...(options.model === undefined || target ? {} : { model: options.model }),
+      ...(options.thinking === undefined || target ? {} : { thinking: options.thinking }),
+      ...(target ? { provider: target.provider, model: target.model, thinking: target.thinking } : {}),
       notifyParentOnSettlement: options.notifyParentOnSettlement === true,
     }, cwd, signal);
     if (!launch.handle) throw new Error("Related delegation did not produce an agent handle");
     return { handle: launch.handle, creation: launch.creation, binding: launch.startup.state,
       activity: "unknown", result: "pending", subscription: { settlement: options.notifyParentOnSettlement === true },
-      ...(launch.returnSetup ? { returnSetup: launch.returnSetup } : {}), launch };
+      ...(launch.returnSetup ? { returnSetup: launch.returnSetup } : {}), launch,
+      ...(routing ? { routing } : {}) };
   }
   private controls(): AgentControls {
     if (!this.agents) throw new Error("Agent evidence and controls are unavailable");

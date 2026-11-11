@@ -9,7 +9,9 @@ import ts from "typescript";
 
 const documents = ["package.json", "LICENSE", "README.md", "CHANGELOG.md"];
 const assets = ["assets/rexpi.jpg", "assets/agents.png", "assets/worktrees.png"];
-const hostPackages = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"];
+const policyFiles = ["examples/virtual-models.json", "lib/vendor/pi-routing-policies/README.md",
+  "lib/vendor/pi-routing-policies/LICENSE"];
+const hostPackages = ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"];
 const canonical = path => typeof path === "string" && path.length > 0 && !path.includes("\\")
   && !path.startsWith("/") && path.split("/").every(part => part && part !== "." && part !== "..");
 
@@ -31,11 +33,13 @@ export function validatePackage(manifest, pack, read) {
   assert.equal(files.size, paths.length, "Duplicate package paths");
   for (const path of files) {
     assert(canonical(path), `Unsafe package path: ${path}`);
-    assert(documents.includes(path) || assets.includes(path) || /^(extensions|lib)\/.+\.ts$/.test(path), `Unexpected package file: ${path}`);
+    assert(documents.includes(path) || assets.includes(path) || policyFiles.includes(path)
+      || /^(extensions|lib)\/.+\.ts$/.test(path) || /^lib\/vendor\/pi-routing-policies\/.+\.(?:js|d\.ts)$/.test(path),
+      `Unexpected package file: ${path}`);
   }
-  for (const path of [...documents, ...assets, "extensions/index.ts"]) assert(files.has(path), `Missing package file: ${path}`);
+  for (const path of [...documents, ...assets, ...policyFiles, "extensions/index.ts"]) assert(files.has(path), `Missing package file: ${path}`);
   for (const path of files) {
-    if (!path.endsWith(".ts")) continue;
+    if (path.endsWith(".d.ts") || !/\.(?:ts|js)$/.test(path)) continue;
     for (const { fileName: specifier } of ts.preProcessFile(read(path), true, true).importedFiles) {
       if (specifier.startsWith(".")) {
         const target = posix.normalize(posix.join(posix.dirname(path), specifier));
