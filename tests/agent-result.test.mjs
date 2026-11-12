@@ -119,9 +119,15 @@ test("a stuck initial provider read is bounded and returns unknown without retai
       else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
   };
-  const result = await f.agent.waitForResult(f.handle, f.source, 20);
-  assert.equal(result.state, "unknown"); assert.match(result.readError, /wait deadline exceeded/);
-  assert.equal(result.evidence, "retained"); assert.equal(f.reader.calls, 1);
+  // AbortSignal.timeout() does not keep Node 22's event loop alive by itself.
+  const keepAlive = setTimeout(() => {}, 100);
+  try {
+    const result = await f.agent.waitForResult(f.handle, f.source, 20);
+    assert.equal(result.state, "unknown"); assert.match(result.readError, /wait deadline exceeded/);
+    assert.equal(result.evidence, "retained"); assert.equal(f.reader.calls, 1);
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test("wait bounds and handle authority are validated before remote work", async () => {

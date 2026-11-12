@@ -255,7 +255,10 @@ test("health polling tolerates transient failures and revokes only after consecu
   await f.selection.stop();
 });
 
-test("host switches and teardown cancel in-flight health checks without stale revocation", async () => {
+test("host switches and teardown cancel in-flight health checks without stale revocation", async t => {
+  // Node 22 can exit before the first unref'd health-poll timer fires.
+  const keepAlive = setTimeout(() => {}, 1000);
+  t.after(() => clearTimeout(keepAlive));
   const f = fixture({ healthCheck: { intervalMs: 1, failureThreshold: 1 } });
   let finish;
   const started = new Promise(resolve => { f.transport.onProbe = (_ticket, signal) => {
@@ -275,7 +278,9 @@ test("host switches and teardown cancel in-flight health checks without stale re
   await f.selection.stop();
 });
 
-test("stop aborts a pending health check and fences its late result", async () => {
+test("stop aborts a pending health check and fences its late result", async t => {
+  const keepAlive = setTimeout(() => {}, 1000);
+  t.after(() => clearTimeout(keepAlive));
   const f = fixture({ healthCheck: { intervalMs: 1, failureThreshold: 1 } });
   let finish;
   const started = new Promise(resolve => { f.transport.onProbe = (_ticket, signal) => {

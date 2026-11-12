@@ -18,7 +18,9 @@ export function binding(who = identity(), overrides = {}) {
     blockId: rid("block"), token: uuid(), pid: process.pid, expiresAt: Date.now() + LEASE_MS, ...overrides };
 }
 export function sandbox(t) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "rexpi-test-")));
+  // Keep Unix-socket paths below macOS's sun_path limit on CI runners.
+  const base = process.platform === "darwin" ? "/tmp" : tmpdir();
+  const root = realpathSync(mkdtempSync(join(base, "rx-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
