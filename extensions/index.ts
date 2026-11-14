@@ -7,6 +7,7 @@ import { executable } from "../lib/executable.ts";
 import { CAPABILITY_DEADLINE_ENV, CAPABILITY_GRANT_ENV, decodeCapabilityDeadline, decodeCapabilityGrant, Launcher,
   type LaunchOptions, type LaunchResult } from "../lib/launch.ts";
 import { CapabilityRuntime } from "../lib/capability-runtime.ts";
+import { MessageCopyRuntime } from "../lib/copy.ts";
 import { registerCapabilityPathTools } from "../lib/capability-paths.ts";
 import { OutcomeCache } from "../lib/outcome-cache.ts";
 import { Rex } from "../lib/rex.ts";
@@ -100,6 +101,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
   let peer: PeerRuntime | undefined;
   let hostSelection: HostSelection | undefined;
   const agentRuntime = new AgentRuntime();
+  const messageCopy = new MessageCopyRuntime();
   observeMessaging(pi, () => messaging);
   let terminal: TerminalOpener | undefined;
   let remoteTerminal: RemoteTerminalOpener | undefined;
@@ -125,6 +127,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
     activation++; agents.cancel(); worktrees.cancel(); layouts?.cancel();
     layoutState.runtime = undefined; layoutState.store = undefined; layoutState.opener = undefined;
     capability?.revoke(); capabilityContext = undefined; localAgentHandle = undefined;
+    messageCopy.detach();
     messaging?.detach(); messaging = undefined;
     agentRuntime.detach();
     peer?.detach(); peer = undefined;
@@ -188,6 +191,7 @@ export default function rexpi(pi: ExtensionAPI, options: { messagingTransport?: 
       runtime = active;
       await active.start(ctx, state => pi.appendEntry(ORIENTATION_ENTRY, state), seed);
       if (generation !== activation) { active.stop(); return; }
+      messageCopy.attach(ctx);
       if (!capability && !capabilityFailure) {
         layoutState.runtime = active;
         layoutState.store = new LayoutStore(join(agentDirectory, "pi-rex", "layouts"));

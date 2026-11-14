@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Make `/copy` copy a trailing visible Rexpi peer or delegated-findings message while preserving Pi's last-assistant behavior for every other message type.
+
 ## 0.6.0
 
 - Add 30-second health polling for selected remote Rex hosts, covering Rexpi-owned and external SSH tunnels with exact server identity checks, consecutive-failure thresholds, disconnected status, and `lastVerifiedAt` inspection evidence. Health checks never reconnect automatically or replay remote operations.
